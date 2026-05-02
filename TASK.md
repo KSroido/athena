@@ -26,11 +26,33 @@
 **Objective**: 搭建 Go 项目脚手架，验证 Eino + Gin + SQLite 基础链路
 
 **Actions**:
-1. 检查 WSL 环境（Go/Node/gcc 版本）
-2. go mod init + 引入依赖
-3. 创建目录结构
-4. 实现数据库 Schema + 迁移
-5. 实现黑板系统核心
-6. 实现 Agent 运行时（supervisor + Eino 子进程）
-7. 实现基础 API
-8. 最简前端
+1. ✅ 安装 Go 1.24.3（WSL 原无 Go）
+2. ✅ go mod init + go mod tidy（Eino v0.8.13, Gin v1.12.0, go-sqlite3 v1.14.44）
+3. ✅ 创建目录结构（internal/{server,core,blackboard,meeting,hr,mcp,db,templates,tools,api,prompts}）
+4. ✅ 数据库 Schema（9表 + 2个migration）
+5. ✅ 黑板系统（board.go + channel批量写入 + FTS5搜索 + 事实分级 + 权限矩阵）
+6. ✅ Agent 运行时（supervisor + 子进程管理 + 崩溃重启）
+7. ✅ Eino ChatModel + Tool 桥接（6个工具：BlackboardRead/Write, Term, MemoryRead/Write, Meeting）
+8. ✅ Agent Loop（ReAct循环：ChatModel + Tool调用 + stdin/stdout协议）
+9. ✅ 基础 API（8个端点 + SPA fallback）
+10. ✅ 最简前端（Vue3+Vite+Pinia+Axios，CEO输入框+项目列表+黑板面板）
+11. ✅ 测试（9/9 PASS，db:4 + blackboard:5含FTS5搜索）
+12. ✅ Makefile（CGO_CFLAGS=-DSQLITE_ENABLE_FTS5 CGO_LDFLAGS=-lm）
+
+**Findings**:
+- go-sqlite3 编译 FTS5 需 `CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm"`
+- Gin v1.12.0 需要 Go >= 1.25.0，GOTOOLCHAIN=auto 自动处理
+- Eino Tool 接口：`utils.InferTool[T,D]` 创建 InvokableTool，`model.WithTools([]*schema.ToolInfo)` 传给 ChatModel
+
+**Implications**: Phase 1 最小可运行 Demo 已完成。可进入 Phase 2（PM Agent + Developer Agent + HR Agent + 事实分级完整实现）
+
+---
+
+[2026-05-03 01:30] Phase 1 完成，所有 9 个 checklist item 已实现
+
+**Git commits**:
+- `eb117e5` Phase 1 scaffolding（19 files, +2629 lines）
+- `afbc139` Eino Tool bridging + Agent ReAct loop（+623 lines）
+- `f6f479a` Frontend + tests + Makefile（+2956 lines）
+
+**代码统计**: ~6200+ 行 Go + ~300 行 TypeScript/Vue
