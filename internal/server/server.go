@@ -14,6 +14,7 @@ import (
 	"github.com/ksroido/athena/internal/config"
 	"github.com/ksroido/athena/internal/core"
 	"github.com/ksroido/athena/internal/db"
+	"github.com/ksroido/athena/internal/hr"
 )
 
 // Server is the Athena HTTP server
@@ -21,7 +22,8 @@ type Server struct {
 	cfg         *config.Config
 	mainDB      *db.DB
 	agentServer *core.AgentServer
-	supervisor  *core.Supervisor
+	manager     *core.AgentManager
+	hr          *hr.HR
 	engine      *gin.Engine
 }
 
@@ -43,19 +45,17 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("init LLM client: %w", err)
 	}
 
-	// Create supervisor
-	supervisor := core.NewSupervisor(
-		"athena-agent",
-		core.LLMConfig{
-			BaseURL: cfg.LLM.BaseURL,
-			APIKey:  cfg.LLM.APIKey,
-			Model:   cfg.LLM.Model,
-		},
-		mainDB,
-	)
+	// Create AgentManager (goroutine-based, replaces subprocess Supervisor)
+	manager := core.NewAgentManager(llm, mainDB, dataDir)
 
-	// Create AgentServer
-	agentServer := core.NewAgentServer(llm, mainDB, supervisor)
+	// Create HR
+	hrInst := hr.New(mainDB, manager, dataDir)
+
+	// Wire HR into AgentManager
+	manager.SetHR(hrInst)
+
+	// Create AgentServer (CEO Secretary)
+	agentServer := core.NewAgentServer(llm, mainDB, manager, hrInst, dataDir)
 
 	// Setup Gin
 	if os.Getenv("GIN_MODE") == "" {
@@ -67,7 +67,8 @@ func New(cfg *config.Config) (*Server, error) {
 		cfg:         cfg,
 		mainDB:      mainDB,
 		agentServer: agentServer,
-		supervisor:  supervisor,
+		manager:     manager,
+		hr:          hrInst,
 		engine:      engine,
 	}
 
@@ -104,8 +105,12 @@ func (s *Server) registerRoutes() {
 		v1.POST("/projects/:id/blackboard", api.HandleWriteBlackboard(s.mainDB))
 
 		// Agents
-		v1.GET("/agents", api.HandleListAgents(s.supervisor))
+		v1.GET("/agents", api.HandleListAgents(s.manager))
 		v1.GET("/projects/:id/agents", api.HandleListProjectAgents(s.mainDB))
+
+		// HR
+		v1.GET("/company", api.HandleListCompany(s.hr))
+		v1.POST("/company/hire", api.HandleHire(s.hr, s.mainDB))
 
 		// Meetings
 		v1.GET("/projects/:id/meetings", api.HandleListMeetings(s.mainDB))
@@ -113,7 +118,6 @@ func (s *Server) registerRoutes() {
 
 	// SPA fallback: serve index.html for all non-API, non-static routes
 	s.engine.NoRoute(func(c *gin.Context) {
-		// Don't serve index.html for API routes
 		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return

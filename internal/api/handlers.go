@@ -12,16 +12,15 @@ import (
 	"github.com/ksroido/athena/internal/blackboard"
 	"github.com/ksroido/athena/internal/core"
 	"github.com/ksroido/athena/internal/db"
+	"github.com/ksroido/athena/internal/hr"
 )
 
 // --- CEO Chat ---
 
-// ChatRequest is the request body for the CEO chat endpoint
 type ChatRequest struct {
 	Message string `json:"message" binding:"required"`
 }
 
-// HandleChat processes CEO messages through AgentServer
 func HandleChat(agentServer *core.AgentServer) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req ChatRequest
@@ -42,7 +41,6 @@ func HandleChat(agentServer *core.AgentServer) gin.HandlerFunc {
 
 // --- Projects ---
 
-// HandleListProjects returns all projects
 func HandleListProjects(mainDB *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := mainDB.DB().Query(
@@ -77,7 +75,6 @@ func HandleListProjects(mainDB *db.DB) gin.HandlerFunc {
 	}
 }
 
-// CreateProjectRequest is the request body for creating a project
 type CreateProjectRequest struct {
 	Name                string `json:"name" binding:"required"`
 	OriginalRequirement string `json:"original_requirement" binding:"required"`
@@ -85,7 +82,6 @@ type CreateProjectRequest struct {
 	Priority            int    `json:"priority"`
 }
 
-// HandleCreateProject creates a new project
 func HandleCreateProject(mainDB *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req CreateProjectRequest
@@ -108,14 +104,12 @@ func HandleCreateProject(mainDB *db.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Create blackboard for this project
 		board, err := blackboard.OpenBoard(mainDB.DataDir(), projectID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("create blackboard: %v", err)})
 			return
 		}
 
-		// Write initial requirement as a goal
 		board.WriteEntrySync(&db.BlackboardEntry{
 			ID:        uuid.New().String()[:8],
 			ProjectID: projectID,
@@ -135,7 +129,6 @@ func HandleCreateProject(mainDB *db.DB) gin.HandlerFunc {
 	}
 }
 
-// HandleGetProject returns a single project
 func HandleGetProject(mainDB *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectID := c.Param("id")
@@ -159,7 +152,6 @@ func HandleGetProject(mainDB *db.DB) gin.HandlerFunc {
 
 // --- Blackboard ---
 
-// HandleGetBlackboard returns blackboard entries for a project
 func HandleGetBlackboard(mainDB *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectID := c.Param("id")
@@ -182,7 +174,6 @@ func HandleGetBlackboard(mainDB *db.DB) gin.HandlerFunc {
 	}
 }
 
-// WriteBlackboardRequest is the request body for writing to the blackboard
 type WriteBlackboardRequest struct {
 	Category        string `json:"category" binding:"required"`
 	Content         string `json:"content" binding:"required"`
@@ -192,7 +183,6 @@ type WriteBlackboardRequest struct {
 	Reasoning       string `json:"reasoning"`
 }
 
-// HandleWriteBlackboard writes an entry to a project's blackboard
 func HandleWriteBlackboard(mainDB *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectID := c.Param("id")
@@ -236,15 +226,23 @@ func HandleWriteBlackboard(mainDB *db.DB) gin.HandlerFunc {
 
 // --- Agents ---
 
-// HandleListAgents returns all running agents
-func HandleListAgents(supervisor *core.Supervisor) gin.HandlerFunc {
+func HandleListAgents(manager *core.AgentManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		agents := supervisor.ListAgents()
+		handles := manager.ListAgents()
+		var agents []map[string]interface{}
+		for _, h := range handles {
+			agents = append(agents, map[string]interface{}{
+				"id":         h.ID,
+				"role":       h.Role,
+				"project_id": h.ProjectID,
+				"status":     string(h.Status),
+				"last_active": h.LastActive,
+			})
+		}
 		c.JSON(http.StatusOK, gin.H{"agents": agents})
 	}
 }
 
-// HandleListProjectAgents returns agents for a specific project
 func HandleListProjectAgents(mainDB *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectID := c.Param("id")
@@ -283,9 +281,54 @@ func HandleListProjectAgents(mainDB *db.DB) gin.HandlerFunc {
 	}
 }
 
+// --- Company / HR ---
+
+func HandleListCompany(hrInst *hr.HR) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		agents, err := hrInst.ListCompany()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"agents": agents, "count": len(agents)})
+	}
+}
+
+type HireRequest struct {
+	Role      string `json:"role" binding:"required"`
+	ProjectID string `json:"project_id" binding:"required"`
+	Reason    string `json:"reason"`
+}
+
+func HandleHire(hrInst *hr.HR, mainDB *db.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req HireRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "role and project_id are required"})
+			return
+		}
+
+		agent, err := hrInst.Hire(&hr.HireRequest{
+			Role:      req.Role,
+			ProjectID: req.ProjectID,
+			Reason:    req.Reason,
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusCreated, gin.H{
+			"agent_id": agent.ID,
+			"name":     agent.Name,
+			"role":     agent.Role,
+			"message":  "Agent已招聘并启动",
+		})
+	}
+}
+
 // --- Meetings (placeholder) ---
 
-// HandleListMeetings returns meetings for a project (placeholder)
 func HandleListMeetings(mainDB *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectID := c.Param("id")
