@@ -93,14 +93,15 @@ func (am *AgentManager) StartAgent(agent *db.Agent, projectID string) error {
 
 	// Create agent loop config — inject callbacks and DB
 	loopCfg := &AgentLoopConfig{
-		AgentID:   agent.ID,
-		Role:      agent.Role,
-		ProjectID: projectID,
-		DataDir:   am.dataDir,
-		LLM:       am.llmConfig,
-		MainDB:    am.mainDB,
-		TaskFunc:  am.SendTask,
-		HireFunc:  am.hireFunc,
+		AgentID:      agent.ID,
+		Role:         agent.Role,
+		ProjectID:    projectID,
+		DataDir:      am.dataDir,
+		LLM:          am.llmConfig,
+		MainDB:       am.mainDB,
+		TaskFunc:     am.SendTask,
+		HireFunc:     am.hireFunc,
+		NotifyPMFunc: am.NotifyPM,
 	}
 
 	loop := NewAgentLoop(loopCfg)
@@ -212,4 +213,21 @@ func (am *AgentManager) MainDB() *db.DB {
 // LLMConfigValue returns the LLM client
 func (am *AgentManager) LLMConfigValue() *LLMClient {
 	return am.llmConfig
+}
+
+// NotifyPM finds the PM agent for a project and sends it a steer message.
+// This is used by the submit_for_review tool to wake up PM for verification.
+func (am *AgentManager) NotifyPM(projectID, message string) error {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	for _, handle := range am.agents {
+		if handle.ProjectID == projectID && handle.Role == "pm" && handle.Status != StatusOffline {
+			handle.SteerCh <- message
+			log.Printf("[agent-manager] notified PM %s for project %s", handle.ID, projectID)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no PM agent found for project %s", projectID)
 }

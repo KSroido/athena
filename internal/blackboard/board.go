@@ -22,13 +22,15 @@ const (
 
 // Categories for blackboard entries
 const (
-	CategoryGoal       = "goal"
-	CategoryFact       = "fact"
-	CategoryDiscovery  = "discovery"
-	CategoryDecision   = "decision"
-	CategoryProgress   = "progress"
-	CategoryResolution = "resolution"
-	CategoryAuxiliary  = "auxiliary"
+	CategoryGoal              = "goal"
+	CategoryFact              = "fact"
+	CategoryDiscovery         = "discovery"
+	CategoryDecision          = "decision"
+	CategoryProgress          = "progress"
+	CategoryResolution        = "resolution"
+	CategoryAuxiliary         = "auxiliary"
+	CategoryAcceptanceCrit    = "acceptance_criteria" // PM-defined acceptance criteria for verification
+	CategoryVerification      = "verification"         // Verification round results (submit/review/escalation)
 )
 
 // Board manages a project-specific blackboard database

@@ -430,6 +430,68 @@ func NewMeetingTool(agentID, projectID string) (tool.InvokableTool, error) {
 	)
 }
 
+// --- Submit For Review Tool ---
+
+// SubmitForReviewInput is the input for the submit_for_review tool
+type SubmitForReviewInput struct {
+	TaskID  string `json:"task_id" jsonschema:"description=The task ID that was assigned to you,required"`
+	Summary string `json:"summary" jsonschema:"description=Brief summary of what was completed,required"`
+	Files   string `json:"files" jsonschema:"description=Comma-separated list of files you produced (relative paths),required"`
+}
+
+// SubmitForReviewOutput is the output for the submit_for_review tool
+type SubmitForReviewOutput struct {
+	Round   int    `json:"round"`
+	Message string `json:"message"`
+}
+
+// NewSubmitForReviewTool creates a tool for developers to submit completed work for PM review.
+// This is the explicit signal that triggers PM verification — without it, PM stays idle.
+func NewSubmitForReviewTool(dataDir, projectID, agentID string, notifyPM func(projectID, message string) error) (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"submit_for_review",
+		"Submit your completed work for PM review. This notifies the PM to start verification. You MUST use this after completing a task — PM will NOT check your work otherwise.",
+		func(ctx context.Context, input SubmitForReviewInput) (*SubmitForReviewOutput, error) {
+			// 1. Count existing verification rounds from blackboard
+			board, err := blackboard.OpenBoard(dataDir, projectID)
+			if err != nil {
+				return nil, fmt.Errorf("open blackboard: %w", err)
+			}
+
+			entries, _ := board.ReadEntries("verification", 200, 0)
+			round := len(entries) + 1
+
+			// 2. Write review_pending entry to blackboard
+			board.WriteEntrySync(&db.BlackboardEntry{
+				ID:        uuid.New().String()[:8],
+				ProjectID: projectID,
+				Category:  "verification",
+				Content:   fmt.Sprintf("[Round %d] Developer %s 提交验收 — Task: %s, Files: %s, Summary: %s", round, agentID, input.TaskID, input.Files, input.Summary),
+				Certainty: "certain",
+				Author:    agentID,
+			})
+			board.Close()
+
+			// 3. Notify PM via callback (sends SteerCh message)
+			if notifyPM != nil {
+				msg := fmt.Sprintf("[验收通知] Developer %s 已提交验收 (Round %d)\nTask: %s\n产出文件: %s\n摘要: %s\n\n请按照验收流程执行：读取验收标准，读取产出文件，逐条对照验证。如不通过，使用 assign_task 发送整改要求。",
+					agentID, round, input.TaskID, input.Files, input.Summary)
+				if err := notifyPM(projectID, msg); err != nil {
+					return &SubmitForReviewOutput{
+						Round:   round,
+						Message: fmt.Sprintf("已提交验收 (Round %d)，但PM通知失败: %v", round, err),
+					}, nil
+				}
+			}
+
+			return &SubmitForReviewOutput{
+				Round:   round,
+				Message: fmt.Sprintf("已提交验收 (Round %d)，PM已收到通知。等待验收结果...", round),
+			}, nil
+		},
+	)
+}
+
 // Ensure db import is used
 var _ = (*db.BlackboardEntry)(nil)
 var _ = (*blackboard.Board)(nil)

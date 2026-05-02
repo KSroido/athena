@@ -149,6 +149,10 @@ func CategoryToLevel(category string) int {
 		return Level5Resolution
 	case CategoryAuxiliary:
 		return Level4_5Aux
+	case CategoryAcceptanceCrit:
+		return Level1Facts
+	case CategoryVerification:
+		return Level3Progress
 	default:
 		return Level2Conjecture
 	}
