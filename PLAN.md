@@ -1370,33 +1370,125 @@ use_count: 0
 
 ### 三、Hermes 任务拆解借鉴 → PM Agent 实现
 
-Hermes 的 delegate_task 机制效果很好，Athena 的 PM Agent 借鉴其核心设计：
+Hermes 的 `delegate_task` 机制效果很好，Athena 的 PM Agent 借鉴其核心设计：
 
-#### 3.1 Hermes delegation 核心机制
+#### 3.1 Hermes delegate_task 工具详解
 
-| 机制 | 说明 | Athena PM Agent 借鉴 |
-|------|------|---------------------|
-| **隔离上下文** | 子Agent获得完全新的对话，零历史 | 每个员工Agent独立上下文，只注入最小必要信息 |
-| **目标+上下文打包** | goal + context 完整传递 | PM 拆解需求时为每个子任务打包：目标 + 上下文 + 约束 |
-| **只返回摘要** | 子Agent只返回最终总结 | 员工 Agent 只通过黑板写入产出，不返回思考过程 |
-| **并行批量** | 最多3个并发子Agent | PM 可同时分配多个独立子任务给不同 Agent |
-| **orchestrator 模式** | 中间层可再拆解 | PM 本身就是 orchestrator，拆解后再分配 |
-| **超时控制** | child_timeout_seconds | Agent 任务超时 → 上报 PM |
+**工具参数**：
 
-#### 3.2 PM Agent 任务拆解 Prompt 设计
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `goal` | string | 必填 | 子Agent的任务目标 |
+| `context` | string | 必填 | 子Agent所需的全部背景信息（**子Agent零历史，这是唯一上下文来源**） |
+| `toolsets` | string[] | `["terminal","file","web"]` | 子Agent可用的工具集 |
+| `role` | string | `"leaf"` | `"leaf"`=不能再委派；`"orchestrator"`=可生成自己的子Agent |
+| `max_iterations` | int | 50 | 子Agent最大工具调用轮次 |
+| `tasks` | array | — | 并行批量任务数组（最多 `max_concurrent_children` 个） |
 
-借鉴 Hermes 的隐式任务拆解 + USER.md 中的 TASK.md 协议，PM Agent 的拆解逻辑：
+**Hermes 配置项** (`config.yaml → delegation`)：
+
+```yaml
+delegation:
+  model: ''                    # 子Agent可使用不同模型（空=继承父Agent）
+  provider: ''
+  inherit_mcp_toolsets: true   # 子Agent继承父Agent的MCP工具集
+  max_iterations: 50           # 每个子Agent最大工具调用轮次
+  child_timeout_seconds: 600   # 子Agent超时（10分钟，每次API/工具调用重置）
+  max_concurrent_children: 3   # 最大并发子Agent数
+  max_spawn_depth: 1           # 嵌套深度限制（1=扁平，2=允许子Agent再生成leaf，3=三层嵌套）
+  orchestrator_enabled: true   # 全局开关：关闭则所有子Agent强制为leaf
+  subagent_auto_approve: false # 子Agent工具调用是否自动批准
+```
+
+**子Agent权限限制**：
+
+| 工具 | Leaf | Orchestrator | 原因 |
+|------|:----:|:----------:|------|
+| `delegate_task` | ❌ | ✅ | 防止递归委派失控 |
+| `clarify` | ❌ | ❌ | 子Agent不能与用户交互 |
+| `memory` | ❌ | ❌ | 子Agent不能写共享持久记忆 |
+| `send_message` | ❌ | ❌ | 子Agent不能跨平台发消息 |
+| `execute_code` | ❌ | ❌ | 子Agent应逐步推理 |
+
+**子Agent生命周期**：
 
 ```
-PM Agent 收到项目后的工作流：
+1. 父Agent调用 delegate_task(goal=..., context=..., toolsets=...)
+2. 系统生成子Agent实例
+   - 全新隔离对话（零历史）
+   - 限制工具集
+   - 独立终端会话
+   - System Prompt 由 goal + context 构建
+3. 子Agent执行任务
+   - 受 max_iterations 限制（默认50轮）
+   - 受 child_timeout_seconds 限制（默认600秒，API调用重置计时器）
+4. 子Agent完成 → 返回结构化摘要（做了什么、发现了什么、修改了哪些文件、遇到什么问题）
+5. 父Agent接收摘要，继续工作
+```
 
+**关键设计**：
+- **同步阻塞**：`delegate_task` 在父Agent当前轮次内执行，阻塞直到所有子Agent完成
+- **批量并行**：`tasks=[...]` 使用 ThreadPoolExecutor 并发执行，结果按输入顺序返回
+- **中断传播**：父Agent被中断 → 所有子Agent被取消 → 返回 `status="interrupted"`
+- **兄弟协调**：多个子Agent修改同一文件时，系统会发出 sibling modification 警告
+
+#### 3.2 Hermes Subagent-Driven Development 技能
+
+Hermes 的 `subagent-driven-development` 技能定义了一个**两阶段审查**的任务执行流程，Athena 的 PM Agent 直接借鉴：
+
+**流程**：
+
+```
+1. 读取计划 → 提取所有任务（一次性读取，不让子Agent自己读计划文件）
+2. 对每个任务：
+   a. 派遣实现子Agent（delegate_task with goal + 完整context）
+   b. 派遣规范审查子Agent → 检查是否符合原始spec
+      - 不通过 → 修复 → 重新审查
+   c. 派遣质量审查子Agent → 检查代码质量
+      - 不通过 → 修复 → 重新审查
+   d. 标记任务完成
+3. 所有任务完成 → 派遣最终集成审查子Agent
+4. 全量测试 + 提交
+```
+
+**任务粒度原则**：每个任务 = 2-5 分钟的专注工作。
+
+| 太大 | 合适 |
+|------|------|
+| "实现用户认证系统" | "创建User模型，包含email和password字段" |
+| | "添加密码哈希函数" |
+| | "创建登录接口" |
+| | "添加JWT token生成" |
+
+**子Agent Context 打包要点**（Hermes 最佳实践）：
+
+```
+BAD: delegate_task(goal="修复那个错误")           ← 子Agent不知道"那个"是什么
+GOOD: delegate_task(
+    goal="修复 api/handlers.py 中的 TypeError",
+    context="""
+    api/handlers.py 第47行 TypeError:
+    'NoneType' object has no attribute 'get'.
+    process_request() 从 parse_body() 接收 dict，
+    但 parse_body() 在 Content-Type 缺失时返回 None。
+    项目路径: /home/user/myproject, Python 3.11。
+    """
+)                                                ← 子Agent拥有完整上下文
+```
+
+#### 3.3 Athena PM Agent 设计（借鉴 Hermes delegate_task）
+
+**PM Agent 收到项目后的工作流**：
+
+```
 1. 需求分析
    - 识别需求中的矛盾和歧义
    - 评估可行性和优化空间
    - 输出：需求分析文档 → 写入黑板
 
-2. 任务拆解
+2. 任务拆解（借鉴 Hermes 隐式拆解 + TASK.md 协议）
    - 将需求拆解为可独立执行的子任务
+   - 每个任务 = 2-5 分钟专注工作（借鉴 subagent-driven-development 粒度）
    - 每个子任务包含：目标、约束、验收标准、依赖关系
    - 识别需要的角色和技能
    - 输出：任务列表 → 写入黑板
@@ -1406,19 +1498,26 @@ PM Agent 收到项目后的工作流：
    - 缺口角色 → 立刻与 HR 沟通招人
    - 输出：招聘请求 → 发给 HR
 
-4. 任务分配
+4. 任务分配（借鉴 Hermes delegate_task 的 context 打包）
    - 按依赖关系排序任务
-   - 独立任务可并行分配
-   - 每个任务打包：目标 + 上下文(从黑板提取) + 约束
+   - 独立任务可并行分配（借鉴 max_concurrent_children=3）
+   - 每个任务打包完整上下文（不让Agent自己读计划，PM提供全部信息）
    - 输出：agent_tasks 表记录
 
-5. 进度跟踪
+5. 两阶段审查（借鉴 subagent-driven-development）
+   a. 规范审查 → 检查是否符合需求spec
+      - 不通过 → Developer 修复 → 重新审查
+   b. 质量审查（Reviewer Agent）→ 检查代码质量
+      - 不通过 → Developer 修复 → 重新审查
+
+6. 进度跟踪
    - 监控黑板上的进展更新
    - 发现阻塞 → 组织会议协调
    - 发现不确定 → 处理上报链路
+   - 任务超时（借鉴 child_timeout_seconds）→ 上报 PM
 ```
 
-**PM Agent 的任务打包格式** (借鉴 Hermes delegate_task 的 context 传递)：
+**PM Agent 的任务打包格式** (借鉴 Hermes delegate_task 的 goal+context 模式)：
 
 ```json
 {
@@ -1426,26 +1525,93 @@ PM Agent 收到项目后的工作流：
   "agent_id": "dev-alice",
   "goal": "实现用户认证模块，支持JWT登录",
   "context": {
+    "task_from_plan": "创建 src/auth/jwt.go，实现 TokenGenerate 和 TokenValidate 函数",
     "project_goals": "构建Go后端API服务",
     "tech_stack": "Go 1.22 + Gin + SQLite",
     "constraints": ["使用golang-jwt库", "token有效期24h"],
     "dependencies": ["task-000: 数据库Schema已创建"],
-    "acceptance_criteria": ["登录接口返回JWT", "中间件校验token"]
+    "acceptance_criteria": ["登录接口返回JWT", "中间件校验token"],
+    "tdd_steps": [
+      "1. 在 tests/auth/jwt_test.go 写失败测试",
+      "2. 运行 go test ./tests/auth/ -v 确认失败",
+      "3. 实现最小代码",
+      "4. 运行 go test ./tests/auth/ -v 确认通过",
+      "5. 运行 go test ./... -q 确认无回归"
+    ]
   }
 }
 ```
 
-#### 3.3 关键差异：Hermes vs Athena PM
+**PM Agent → 员工Agent 的"子Agent"限制** (借鉴 Hermes 权限隔离)：
 
-| 维度 | Hermes | Athena PM Agent |
-|------|--------|-----------------|
-| 拆解方式 | 隐式（Agent自行判断） | 显式（PM专门负责） |
-| 上下文传递 | goal+context 字符串 | 黑板读取 + 任务打包 JSON |
-| 人员调度 | 固定工具集 | HR 动态招聘 |
+| 能力 | 员工Agent | 说明 |
+|------|:--------:|------|
+| 接受新任务 | ✅ | 从 PM 获取 |
+| 写黑板 | ✅ | 按角色权限 |
+| 参加会议 | ✅ | 遇到问题主动发起 |
+| 直接找CEO | ❌ | 通过 PM → AgentServer → CEO |
+| 招人 | ❌ | 向 HR 申请，经会议审核 |
+| 再委派子任务 | ❌ | 只有 PM 可以分配任务（除非该Agent被设为 orchestrator） |
+| 写共享记忆 | ✅ | 写入个人 memory.md，不影响其他Agent |
+
+#### 3.4 关键差异：Hermes delegate_task vs Athena PM 分配
+
+| 维度 | Hermes delegate_task | Athena PM Agent |
+|------|---------------------|-----------------|
+| 拆解方式 | 隐式（Agent自行判断何时委派） | 显式（PM专门负责拆解和分配） |
+| 上下文传递 | goal+context 字符串 | 黑板读取 + 任务打包 JSON（含 TDD 步骤） |
+| 人员调度 | 固定工具集，无动态扩编 | HR 动态招聘，按需扩编 |
+| 审查机制 | 无内置审查（需 skill 配合） | 内置两阶段审查（规范→质量） |
 | 任务依赖 | 无显式依赖管理 | 依赖关系排序 + 阻塞检测 |
+| 超时处理 | child_timeout_seconds，超时返回失败 | 任务超时 → 上报 PM → 可能开会协调 |
+| 中断传播 | 父Agent中断→子Agent全部取消 | CEO可暂停项目→该项目所有Agent暂停 |
 | 不确定性处理 | 无 | 上报链路 → PM → AgentServer → CEO |
+| 结果收集 | 只返回结构化摘要 | 员工写入黑板 + 任务状态更新 |
+
+### 四、Hermes Prompt 组装借鉴 → Athena Agent System Prompt
+
+Hermes 的 System Prompt 采用 **10 层动态拼装**，Athena 借鉴此架构为每个员工 Agent 构建 system prompt：
+
+#### 4.1 Hermes Prompt 10 层结构
+
+| 层 | 内容 | 来源 | 缓存 |
+|----|------|------|:----:|
+| 1 | Agent 身份 | SOUL.md 或 DEFAULT_AGENT_IDENTITY | ✅ |
+| 2 | 工具使用行为指导 | prompt_builder.py 硬编码 | ✅ |
+| 3 | Honcho 静态块 | 第三方集成 | ✅ |
+| 4 | 可选系统消息 | 配置/API 覆盖 | ✅ |
+| 5 | 冻结 MEMORY 快照 | memory 工具持久化 | ✅ |
+| 6 | 冻结 USER 快照 | 用户画像数据 | ✅ |
+| 7 | 技能索引 | skills/ 目录扫描 | ✅ |
+| 8 | 项目上下文文件 | .hermes.md → AGENTS.md → CLAUDE.md → .cursorrules | ✅ |
+| 9 | 时间戳 + Session ID | 运行时生成 | ✅ |
+| 10 | 平台提示 | CLI/Discord/Slack 等 | ✅ |
+
+**关键设计**：
+- **冻结快照**：MEMORY 和 USER 在会话启动时加载，会话内写入不修改已构建的 prompt
+- **安全扫描**：所有上下文文件经过注入攻击检测，截断上限 20K 字符（70/20 头尾比）
+- **子Agent特殊处理**：`skip_context_files=True` → 使用 DEFAULT_AGENT_IDENTITY 替代 SOUL.md，跳过项目上下文
+
+#### 4.2 Athena Agent System Prompt 组装（借鉴 Hermes）
+
+| 层 | 内容 | Athena 来源 | 说明 |
+|----|------|------------|------|
+| 1 | Agent 身份 | `internal/prompts/{role}.md` | 角色专属 soul.md，替代 Hermes 的 SOUL.md |
+| 2 | 公司级指令 | 黑板层级0（项目元信息） | 所有Agent共享 |
+| 3 | 项目级指令 | 黑板层级1-2（事实+猜测） | 同项目Agent共享 |
+| 4 | 会议决议 | 黑板层级5 | 相关Agent共享 |
+| 5 | 冻结个人记忆快照 | `data/agents/{name}/memory.md` | §分隔声明式事实 |
+| 6 | 技能索引 | `data/agents/{name}/skills/*/SKILL.md` | 个人技能列表 |
+| 7 | 任务上下文 | PM 打包的 goal+context JSON | 当前任务的完整信息 |
+| 8 | 时间戳 + AgentID | 运行时生成 | 会话标识 |
+
+**Athena vs Hermes 差异**：
+- Hermes 的 USER 快照 → Athena 无此层（CEO偏好通过 AgentServer 传递）
+- Hermes 的项目上下文文件 → Athena 用黑板替代（更结构化）
+- Hermes 的平台提示 → Athena 统一为 Web API 交互
+- Athena 新增"任务上下文"层 → 来自 PM 的 delegate_task 式打包
 
 ---
 
 *本文档是 Athena 项目的规划文档，将随开发进展持续更新。*
-*最后更新: 2026-05-02 (v5: MetaGPT架构参考 + Hermes记忆/技能/任务拆解借鉴)*
+*最后更新: 2026-05-02 (v6: Hermes delegate_task 详解 + Subagent-Driven Development 两阶段审查 + Prompt 组装架构)*
