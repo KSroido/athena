@@ -28,7 +28,11 @@ type Server struct {
 // New creates a new Athena server
 func New(cfg *config.Config) (*Server, error) {
 	// Initialize main database
-	mainDB, err := db.New(cfg.Agents.DataDir)
+	dataDir := cfg.Agents.DataDir
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	mainDB, err := db.New(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init database: %w", err)
 	}
@@ -41,7 +45,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Create supervisor
 	supervisor := core.NewSupervisor(
-		"athena-agent", // binary path
+		"athena-agent",
 		core.LLMConfig{
 			BaseURL: cfg.LLM.BaseURL,
 			APIKey:  cfg.LLM.APIKey,
@@ -80,6 +84,10 @@ func (s *Server) registerRoutes() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// Serve frontend static files
+	s.engine.Static("/assets", "./frontend/dist/assets")
+	s.engine.StaticFile("/favicon.ico", "./frontend/dist/favicon.ico")
+
 	// API v1 group
 	v1 := s.engine.Group("/api")
 	{
@@ -102,6 +110,16 @@ func (s *Server) registerRoutes() {
 		// Meetings
 		v1.GET("/projects/:id/meetings", api.HandleListMeetings(s.mainDB))
 	}
+
+	// SPA fallback: serve index.html for all non-API, non-static routes
+	s.engine.NoRoute(func(c *gin.Context) {
+		// Don't serve index.html for API routes
+		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.File("./frontend/dist/index.html")
+	})
 }
 
 // Run starts the Athena server
@@ -109,6 +127,7 @@ func (s *Server) Run() error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
 
 	log.Printf("Athena server starting on %s", addr)
+	log.Printf("Frontend: http://localhost:%d", s.cfg.Server.Port)
 
 	// Graceful shutdown
 	go func() {
@@ -117,6 +136,7 @@ func (s *Server) Run() error {
 		<-quit
 		log.Println("Shutting down Athena server...")
 		s.mainDB.Close()
+		os.Exit(0)
 	}()
 
 	return s.engine.Run(addr)
