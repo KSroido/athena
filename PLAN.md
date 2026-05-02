@@ -919,122 +919,197 @@ WS   /ws/projects/{id}/events
 ## 项目目录结构
 
 ```
-athena/
-├── README.md
-├── PLAN.md                       # 本文件
-├── go.mod
-├── go.sum
-├── main.go                       # 入口
-├── cmd/
+athena/                              # 项目根目录 (D:/work/athena/)
+├── README.md                        # 项目说明
+├── PLAN.md                          # 本文件 — 项目规划文档
+├── LICENSE
+├── .gitignore
+├── go.mod                           # Go 模块定义
+├── go.sum                           # Go 依赖校验
+├── main.go                          # 程序入口
+│
+├── cmd/                             # CLI 命令
 │   └── athena/
-│       └── main.go               # CLI 入口
+│       └── main.go                  # CLI 入口 (start/stop/status)
 │
-├── internal/
-│   ├── server/                   # HTTP 服务
-│   │   ├── server.go             # Gin 服务入口
-│   │   ├── router.go             # 路由注册
-│   │   └── middleware.go         # 中间件
-│   │
-│   ├── core/                     # 核心模块
-│   │   ├── agent_server.go       # AgentServer (CEO秘书)
-│   │   ├── hr_agent.go           # HR Agent
-│   │   ├── pm_agent.go           # 项目经理 Agent
-│   │   ├── agent_runtime.go      # Agent 运行时
-│   │   ├── agent_loop.go         # Agent 主循环
-│   │   └── llm_client.go        # LLM 调用封装
-│   │
-│   ├── blackboard/               # 黑板系统
-│   │   ├── board.go              # 黑板核心逻辑
-│   │   ├── fact_manager.go       # 事实管理 (确定/猜测)
-│   │   ├── access_control.go     # 读写权限控制
-│   │   └── search.go             # 语义搜索 (ChromaDB)
-│   │
-│   ├── meeting/                  # 会议系统
-│   │   ├── manager.go            # 会议管理
-│   │   ├── database.go           # 每会议独立 SQLite 管理
-│   │   └── resolution.go         # 决议生成与分发
-│   │
-│   ├── db/                       # 数据库层
-│   │   ├── database.go           # SQLite 连接管理
-│   │   ├── models.go             # 数据模型
-│   │   └── migrations/           # 数据库迁移
-│   │
-│   ├── templates/                # Agent 模板
-│   │   ├── investor.yaml         # CEO秘书模板 (AgentServer)
-│   │   ├── hr.yaml               # HR 模板
-│   │   ├── pm.yaml               # 项目经理模板
-│   │   ├── developer.yaml
-│   │   ├── tester.yaml
-│   │   ├── designer.yaml
-│   │   ├── reviewer.yaml
-│   │   ├── ops.yaml
-│   │   └── doc.yaml
-│   │
-│   ├── tools/                    # 工具定义
-│   │   ├── base.go               # 工具接口
-│   │   ├── file_tools.go
-│   │   ├── code_tools.go
-│   │   ├── test_tools.go
-│   │   ├── git_tools.go
-│   │   ├── design_tools.go
-│   │   └── review_tools.go
-│   │
-│   ├── mcp/                      # MCP 工具集成
-│   │   ├── registry.go           # MCP Server 注册表
-│   │   ├── manager.go            # MCP 生命周期管理 (下载/配置/启动/停止)
-│   │   ├── stdio_transport.go    # stdio 传输 (优先)
-│   │   └── sse_transport.go      # SSE 传输 (备选，占用端口)
-│   │
-│   ├── api/                      # API 路由
-│   │   ├── projects.go
-│   │   ├── agents.go
-│   │   ├── blackboard.go
-│   │   ├── chat.go
-│   │   ├── meetings.go
-│   │   └── websocket.go
-│   │
-│   └── prompts/                  # Prompt 模板 (soul.md)
-│       ├── investor.md
-│       ├── hr.md
-│       ├── pm.md
-│       ├── developer.md
-│       ├── tester.md
-│       ├── designer.md
-│       ├── reviewer.md
-│       ├── ops.md
-│       └── doc.md
+├── config/                          # 配置文件
+│   ├── athena.yaml                  # 主配置 (端口/LLM/上限等)
+│   └── athena.example.yaml          # 配置示例
 │
-├── frontend/                     # Vue 3 前端
+├── internal/                        # 内部包 (不可外部引用)
+│   ├── server/                      # HTTP 服务
+│   │   ├── server.go                # Gin 服务入口
+│   │   ├── router.go                # 路由注册
+│   │   └── middleware.go            # 中间件 (CORS/日志/鉴权)
+│   │
+│   ├── core/                        # 核心模块
+│   │   ├── agent_server.go          # AgentServer (CEO秘书)
+│   │   ├── hr_agent.go              # HR Agent (招聘/裁员/工具分配)
+│   │   ├── pm_agent.go              # 项目经理 Agent (需求拆解/任务分配)
+│   │   ├── agent_runtime.go         # Agent 运行时 (goroutine 管理)
+│   │   ├── agent_loop.go            # Agent 主循环
+│   │   ├── llm_client.go            # LLM 调用封装 (多模型统一接口)
+│   │   └── context_builder.go       # 上下文构建 (黑板+角色+个人记忆)
+│   │
+│   ├── blackboard/                  # 黑板系统
+│   │   ├── board.go                 # 黑板核心逻辑 (读写/层级管理)
+│   │   ├── fact_manager.go          # 事实管理 (确定/猜测/辅助知识)
+│   │   ├── access_control.go        # 读写权限控制 (角色→层级矩阵)
+│   │   └── search.go                # 语义搜索 (ChromaDB 集成)
+│   │
+│   ├── meeting/                     # 会议系统
+│   │   ├── manager.go               # 会议管理 (创建/邀请/关闭)
+│   │   ├── database.go              # 每会议独立 SQLite 管理
+│   │   └── resolution.go            # 决议生成与分发
+│   │
+│   ├── hr/                          # HR 子系统
+│   │   ├── recruiter.go             # 招聘逻辑 (模板匹配/上下文注入)
+│   │   ├── layoff.go                # 裁员逻辑 (方案生成/Agent销毁)
+│   │   └── capacity.go              # 规模上限检查 (人数/资源)
+│   │
+│   ├── mcp/                         # MCP 工具集成
+│   │   ├── registry.go              # MCP Server 注册表
+│   │   ├── manager.go               # MCP 生命周期 (下载/配置/启动/停止)
+│   │   ├── stdio_transport.go       # stdio 传输 (优先，不占端口)
+│   │   └── sse_transport.go         # SSE 传输 (备选，占用端口)
+│   │
+│   ├── db/                          # 数据库层
+│   │   ├── database.go              # SQLite 连接管理
+│   │   ├── models.go                # 数据模型 (Agent/Project/Fact等)
+│   │   └── migrations/              # 数据库迁移脚本
+│   │       ├── 001_init.sql
+│   │       └── 002_add_auxiliary.sql
+│   │
+│   ├── templates/                   # Agent 角色模板
+│   │   ├── ceo_secretary.yaml       # CEO秘书模板 (AgentServer)
+│   │   ├── hr.yaml                  # HR 模板
+│   │   ├── pm.yaml                  # 项目经理模板
+│   │   ├── developer.yaml           # 开发模板
+│   │   ├── tester.yaml              # 测试模板
+│   │   ├── designer.yaml            # 设计模板
+│   │   ├── reviewer.yaml            # 审查模板
+│   │   ├── ops.yaml                 # 运维模板
+│   │   └── doc.yaml                 # 文档模板
+│   │
+│   ├── tools/                       # 内置工具定义
+│   │   ├── base.go                  # 工具接口 (Tool interface)
+│   │   ├── file_tools.go            # 文件读写编辑
+│   │   ├── code_tools.go            # 代码搜索/执行
+│   │   ├── test_tools.go            # 测试框架/断言
+│   │   ├── git_tools.go             # Git 操作
+│   │   ├── design_tools.go          # 架构/接口设计
+│   │   └── review_tools.go          # 代码审查/Linter/Diff
+│   │
+│   ├── api/                         # API 路由处理
+│   │   ├── projects.go              # 项目 CRUD
+│   │   ├── agents.go                # Agent 管理/招聘/裁员
+│   │   ├── blackboard.go            # 黑板读写
+│   │   ├── chat.go                  # CEO 对话
+│   │   ├── meetings.go              # 会议操作
+│   │   ├── decisions.go             # CEO 抉择
+│   │   ├── mcp.go                   # MCP 工具管理
+│   │   └── websocket.go             # WebSocket 实时推送
+│   │
+│   └── prompts/                     # Prompt 模板 (soul.md 等效)
+│       ├── ceo_secretary.md         # CEO秘书角色指令
+│       ├── hr.md                    # HR 角色指令
+│       ├── pm.md                    # 项目经理角色指令
+│       ├── developer.md             # 开发角色指令
+│       ├── tester.md                # 测试角色指令
+│       ├── designer.md              # 设计角色指令
+│       ├── reviewer.md              # 审查角色指令
+│       ├── ops.md                   # 运维角色指令
+│       └── doc.md                   # 文档角色指令
+│
+├── data/                            # 运行时数据 (gitignore)
+│   ├── board/                       # 黑板数据库
+│   │   └── BOARD.sqlite             # 公司黑板主数据库
+│   ├── meetings/                    # 会议数据库 (每会议独立文件)
+│   │   ├── meeting_m1.sqlite        # 会议 m1 数据
+│   │   ├── meeting_m2.sqlite        # 会议 m2 数据
+│   │   └── archived/                # 已关闭会议归档
+│   │       └── meeting_m0.sqlite
+│   ├── agents/                      # Agent 个人数据
+│   │   ├── dev-alice/               # 开发 Agent: alice
+│   │   │   ├── context.db           # 个人上下文 SQLite
+│   │   │   ├── memory.md            # 个人工作记忆
+│   │   │   └── working/             # 工作目录 (代码等)
+│   │   └── tester-bob/              # 测试 Agent: bob
+│   │       ├── context.db
+│   │       ├── memory.md
+│   │       └── working/
+│   ├── chroma/                      # ChromaDB 语义搜索数据
+│   └── logs/                        # 运行日志
+│       └── athena.log
+│
+├── mcp_servers/                     # 第三方 MCP Server (gitignore)
+│   ├── mcp-filesystem/              # 文件系统 MCP
+│   └── mcp-sqlite/                  # SQLite MCP
+│
+├── frontend/                        # Vue 3 前端
 │   ├── package.json
+│   ├── tsconfig.json
 │   ├── vite.config.ts
-│   ├── src/
-│   │   ├── App.vue
-│   │   ├── main.ts
-│   │   ├── views/
-│   │   │   ├── Dashboard.vue
-│   │   │   ├── Project.vue
-│   │   │   ├── Blackboard.vue
-│   │   │   └── Meetings.vue
-│   │   ├── components/
-│   │   │   ├── ChatInput.vue
-│   │   │   ├── ProjectBoard.vue
-│   │   │   ├── AgentStatus.vue
-│   │   │   ├── FactList.vue
-│   │   │   └── MeetingList.vue
-│   │   └── stores/
-│   │       └── project.ts
-│   └── index.html
+│   ├── index.html
+│   └── src/
+│       ├── App.vue
+│       ├── main.ts
+│       ├── api/                     # API 调用封装
+│       │   ├── projects.ts
+│       │   ├── agents.ts
+│       │   ├── blackboard.ts
+│       │   ├── chat.ts
+│       │   └── websocket.ts
+│       ├── views/                   # 页面
+│       │   ├── Dashboard.vue        # 仪表盘
+│       │   ├── Project.vue          # 项目详情
+│       │   ├── Blackboard.vue       # 黑板查看
+│       │   ├── Meetings.vue         # 会议列表
+│       │   └── Layoff.vue           # 裁员方案
+│       ├── components/              # 组件
+│       │   ├── ChatInput.vue        # CEO 对话输入框
+│       │   ├── ProjectBoard.vue     # 项目看板
+│       │   ├── AgentStatus.vue      # Agent 状态卡片
+│       │   ├── FactList.vue         # 事实列表 (确定/猜测/辅助)
+│       │   ├── MeetingList.vue      # 会议列表
+│       │   └── DecisionPanel.vue    # CEO 抉择面板
+│       └── stores/                  # Pinia 状态管理
+│           ├── project.ts
+│           └── agent.ts
 │
-├── tests/
+├── tests/                           # 测试
 │   ├── blackboard_test.go
 │   ├── agent_runtime_test.go
 │   ├── hr_agent_test.go
-│   └── meeting_test.go
+│   ├── meeting_test.go
+│   ├── mcp_test.go
+│   └── layoff_test.go
 │
-└── scripts/
-    ├── setup.sh
-    └── dev.sh
+├── scripts/                         # 脚本
+│   ├── setup.sh                     # 初始化
+│   ├── dev.sh                       # 开发模式启动
+│   └── build.sh                     # 构建
+│
+└── docs/                            # 文档
+    ├── architecture.md              # 架构说明
+    └── api.md                       # API 文档
 ```
+
+### 路径用途说明
+
+| 路径 | 用途 | 是否 gitignore |
+|------|------|---------------|
+| `data/board/BOARD.sqlite` | 黑板主数据库 | ✅ 忽略 |
+| `data/meetings/meeting_*.sqlite` | 每会议独立数据库 | ✅ 忽略 |
+| `data/agents/*/context.db` | Agent 个人上下文 | ✅ 忽略 |
+| `data/agents/*/memory.md` | Agent 个人工作记忆 | ✅ 忽略 |
+| `data/agents/*/working/` | Agent 工作目录 | ✅ 忽略 |
+| `data/chroma/` | 语义搜索索引 | ✅ 忽略 |
+| `data/logs/` | 运行日志 | ✅ 忽略 |
+| `mcp_servers/` | 第三方 MCP Server | ✅ 忽略 |
+| `internal/templates/` | Agent 角色模板 | ❌ 纳入版本控制 |
+| `internal/prompts/` | 角色 Prompt | ❌ 纳入版本控制 |
+| `config/athena.yaml` | 运行时配置 | ✅ 忽略 (example 不忽略) |
 
 ---
 
