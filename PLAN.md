@@ -116,7 +116,7 @@ CEO安装后即可通过 Web 界面使用，无需复杂配置
 
 ## ✅ 设计矛盾与待确认项（已全部解决）
 
-> 以下矛盾已在用户审查后确认解决方案。
+> 以下矛盾已在用户(CEO)审查后确认解决方案。
 
 ### ✅ 矛盾 1: "Agent 不直接通信" vs "Agent 需要沟通" — 已解决
 
@@ -1015,14 +1015,14 @@ athena/
 
 ### Q2: 为什么选 SQLite 而不是 PostgreSQL？
 
-**A**: 开箱即用原则。SQLite 零配置，单文件，用户无需安装数据库服务。后续可通过替换 database.go 支持 PostgreSQL。
+**A**: 开箱即用原则。SQLite 零配置，单文件，用户(CEO)无需安装数据库服务。后续可通过替换 database.go 支持 PostgreSQL。
 
 ### Q3: 为什么后端用 Go 而不是 Python？
 
 **A**: Go 的优势——
 - 每个 Agent 独立 goroutine，天然上下文隔离
 - 原生并发，无需 asyncio
-- 单二进制部署，用户无需安装 Python 环境
+- 单二进制部署，用户(CEO)无需安装 Python 环境
 - 类型安全，编译期检查
 - 性能更好，适合同时运行多个 Agent
 
