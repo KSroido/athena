@@ -51,8 +51,8 @@ Athena 启动时只需要 3 个核心 Agent + 一套通用员工模板：
 
 ## 核心设计原则
 
-### 1. 专人专用
-开发只做开发，测试只做测试，设计只做设计——绝不跨岗
+### 1. 专人专用，一岗一项目一Agent
+开发只做开发，测试只做测试，设计只做设计——绝不跨岗。**一个岗位在一个项目中只有一个 Agent**，两个项目至少两个开发 Agent。HR 决定是否需要同项目多 Agent（一般来说一岗一人，控制成本）。
 
 ### 2. 上下文隔离，按需共享
 上下文完全隔离，非本职上下文控制在最少——Agent 只看到自己职责范围内的事，注意力更集中。需要共享时通过黑板读取和会议沟通，而非把别人的上下文全部灌进来。
@@ -62,6 +62,7 @@ Athena 启动时只需要 3 个核心 Agent + 一套通用员工模板：
 - **按需共享是触发态**：遇到跨领域问题时开会，仅传递与问题直接相关的信息（决议、事实），不传递对方的思考过程
 - **非本职上下文最小化**：测试 Agent 不看开发调试过程，开发 Agent 不看测试用例细节，各人只关注自己领域
 - **共享产出不共享过程**：黑板上的事实和决议是共享的，但每个人得出结论的思考过程是私有的
+- **重要辅助知识必须共享**：报错日志、关键判断依据、诊断信息等虽然属于"过程"的一部分，但对他人的判断有直接帮助，必须通过黑板或会议共享
 
 ### 3. 黑板共享
 项目目标、进展、确定性事实通过中央黑板共享给所有 Agent
@@ -108,14 +109,31 @@ Agent 间通过会议系统进行结构化沟通，与黑板模式互补：
 - 商讨仍无法消除不确定 → 汇报 AgentServer (CEO秘书)
 - AgentServer 向CEO发起会话，CEO作为公司最高决策者仅进行关键抉择
 
-### 10. 公司规模上限
+### 10. 公司规模上限与裁员机制
 CEO可定义公司规模上限，HR 招聘前必须检查：
 - **人数上限**：如 "最多 100 个 Agent"
 - **资源上限**：如 "总内存不超过 16GB"
 - 上限配置由 AgentServer 管理，CEO可随时调整
 - 达到上限后，HR 暂停招聘，需要扩容时由 AgentServer 向CEO确认
 
-### 11. 开箱即用
+**裁员机制**：当公司资源紧张时，HR 出具裁员方案，CEO在前端界面点选项即可：
+- 优先裁员：已完成项目的 Agent、闲置超时的 Agent
+- 如果裁员仍不够：HR 建议 CEO 搁置某些现有计划（暂停项目释放资源）
+- 实在无法裁员：HR 建议 CEO 增加员工上限
+
+### 11. 工具配备与MCP集成
+每个岗位的 Agent 必须配备专属工具集。工具缺失时的解决优先级：
+
+1. **优先：搜索互联网寻找成熟工具** → 下载配置 → 通过 MCP 给对应 Agent 调用（优先使用 stdio 传输，避免占用端口）
+2. **其次：公司内部开发** → HR 组织开发小组，自行开发缺失工具
+3. **兜底：上报CEO** → 工具卡点无法解决时，告知CEO问题所在
+
+MCP 工具集成原则：
+- **stdio 优先**：MCP Server 优先使用 stdio 传输方式，不占用额外端口
+- **专人专用**：每个 Agent 只能调用自己角色模板中定义的 MCP 工具
+- **按需加载**：工具随 Agent 创建时配置，Agent 销毁时释放
+
+### 12. 开箱即用
 CEO安装后即可通过 Web 界面使用，无需复杂配置
 
 ---
@@ -353,10 +371,11 @@ CREATE TABLE project_discoveries (
 CREATE TABLE agents (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
-    role        TEXT NOT NULL,  -- investor/hr/pm/developer/tester/designer/reviewer/ops/doc
-    project_id  TEXT REFERENCES projects(id),
+    role        TEXT NOT NULL,  -- ceo_secretary/hr/pm/developer/tester/designer/reviewer/ops/doc
+    project_id  TEXT REFERENCES projects(id),  -- 一个Agent只绑定一个项目（一岗一项目）
     status      TEXT DEFAULT 'idle',  -- idle/working/in_meeting/offline
-    tools       TEXT,           -- JSON: 可用工具列表
+    tools       TEXT,           -- JSON: 可用工具列表 (含MCP工具)
+    mcp_servers TEXT,           -- JSON: MCP Server 配置 (优先stdio)
     model       TEXT DEFAULT 'default',
     created_by  TEXT,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -413,7 +432,7 @@ CREATE TABLE agent_contexts (
 CREATE TABLE blackboard_entries (
     id          TEXT PRIMARY KEY,
     project_id  TEXT NOT NULL REFERENCES projects(id),
-    category    TEXT NOT NULL,  -- goal/fact/discovery/decision/progress/resolution
+    category    TEXT NOT NULL,  -- goal/fact/discovery/decision/progress/resolution/auxiliary
     content     TEXT NOT NULL,
     certainty   TEXT NOT NULL CHECK(certainty IN ('certain', 'conjecture')),
     author      TEXT,
@@ -473,7 +492,7 @@ CREATE TABLE meeting_messages (
 | 角色 | 职责 | 专属工具集 | 上下文内容 |
 |------|------|-----------|-----------|
 | **AgentServer (CEO秘书)** | 与CEO直接对话、获取项目、关键抉择请示CEO、项目交给项目经理 | 项目管理工具、HR 调度工具、CEO交互 | 全局视角 |
-| **HR Agent** | 感知缺口、创建 Agent、分配工具、扩展模板 | Agent 模板库、工具注册表、互联网搜索、配置生成器 | 公司组织架构 |
+| **HR Agent** | 感知缺口、创建/销毁 Agent、分配工具、扩展模板、裁员方案 | Agent 模板库、工具注册表、互联网搜索、配置生成器 | 公司组织架构 |
 | **项目经理 Agent** | 拆解细化需求、分配任务、处理不确定性上报 | 任务分解工具、需求分析工具 | 项目目标 + 需求文档 |
 | **Developer Agent** | 代码开发 | 文件读写、代码执行、Git、Debug 工具 | 项目目标 + 技术上下文 + 自己的历史 |
 | **Tester Agent** | 测试 | 测试框架、覆盖率工具、断言工具 | 项目目标 + 接口定义 + 自己的历史 |
@@ -571,22 +590,61 @@ tools:
   - code_search
   - debug
 
+mcp_servers:           # MCP 工具 (stdio 优先)
+  - name: filesystem
+    transport: stdio
+    command: "mcp-filesystem"
+  - name: database
+    transport: stdio
+    command: "mcp-sqlite"
+
 blackboard_read:
   - project_goals
   - project_facts
   - tech_spec
   - api_definitions
   - meeting_resolutions
+  - error_logs          # 重要辅助知识：报错日志必须共享
 
 blackboard_write:
   - project_facts
   - project_discoveries
   - progress_updates
+  - error_logs          # 开发发现的关键报错写入黑板供测试等查看
 
 context_injection:
   - project_goals
   - tech_stack
   - coding_standards
+```
+
+### 裁员流程
+
+```
+1. 触发条件: 公司资源紧张 / 项目完成 / Agent 闲置超时
+2. HR 生成裁员方案:
+   a. 扫描已完成项目的 Agent → 标记为可释放
+   b. 扫描闲置超时的 Agent → 标记为可释放
+   c. 计算释放后资源占用 → 是否满足需求
+3. HR 将方案提交 AgentServer → 展示给CEO
+4. CEO 在前端界面选择:
+   - ✅ 同意裁员: 释放选中的 Agent
+   - ⏸️ 搁置项目: 暂停某项目，释放其全部 Agent
+   - ⬆️ 增加上限: 扩大公司规模限制
+5. 执行: HR 销毁 Agent goroutine、清理上下文、从数据库注销
+```
+
+### 工具配备流程
+
+```
+1. Agent 创建时 → 按角色模板分配基础工具
+2. Agent 工作中发现工具缺失 → 上报项目经理
+3. 项目经理评估 → 确认需要新工具
+4. 解决优先级:
+   a. 🔍 搜索互联网 → 找到成熟工具 → 下载配置 → MCP 注册 (stdio 优先)
+   b. 🛠️ 公司内部开发 → HR 组织开发小组 → 自行开发缺失工具
+   c. 📢 上报CEO → 工具卡点无法解决，告知CEO问题所在
+5. 工具就绪 → HR 更新 Agent 的工具配置 → Agent 可调用
 ```
 
 ---
@@ -672,6 +730,13 @@ context_injection:
 │  │ - 设计中的新想法                         │ │
 │  └─────────────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────┐ │
+│  │ 层级 4.5: 辅助知识 (重要判断依据)        │ │
+│  │ - 报错日志、堆栈信息                     │ │
+│  │ - 关键诊断数据                           │ │
+│  │ - 环境配置信息                           │ │
+│  │ ⚠️ 属于过程但必须共享，辅助他人判断      │ │
+│  └─────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────┐ │
 │  │ 层级 5: 会议决议                         │ │
 │  │ - 来自会议系统的决议                     │ │
 │  │ - 所有相关人可见                         │ │
@@ -686,19 +751,19 @@ context_injection:
 
 ### 黑板读写控制矩阵
 
-| 角色 | 层级0 | 层级1 | 层级2 | 层级3 | 层级4 | 层级5 |
-|------|-------|-------|-------|-------|-------|-------|
-| AgentServer (CEO秘书) | RW | RW | RW | R | R | R |
-| HR | R | R | R | R | R | R |
-| 项目经理 | RW | RW | RW | RW | RW | R |
-| Developer | R | R | RW | RW | RW | R |
-| Tester | R | R | RW | RW | RW | R |
-| Designer | R | RW | RW | RW | RW | R |
-| Reviewer | R | RW | R | R | RW | R |
-| Ops | R | R | RW | RW | RW | R |
-| Doc | R | R | R | RW | R | R |
+| 角色 | 层级0 | 层级1 | 层级2 | 层级3 | 层级4 | 层级4.5(辅助) | 层级5 |
+|------|-------|-------|-------|-------|-------|-------------|-------|
+| AgentServer (CEO秘书) | RW | RW | RW | R | R | R | R |
+| HR | R | R | R | R | R | R | R |
+| 项目经理 | RW | RW | RW | RW | RW | RW | R |
+| Developer | R | R | RW | RW | RW | RW | R |
+| Tester | R | R | RW | RW | RW | RW | R |
+| Designer | R | RW | RW | RW | RW | R | R |
+| Reviewer | R | RW | R | R | RW | RW | R |
+| Ops | R | R | RW | RW | RW | RW | R |
+| Doc | R | R | R | RW | R | R | R |
 
-> R = 只读, RW = 可读写
+> R = 只读, RW = 可读写。层级4.5(辅助知识): 报错日志等对判断有直接帮助的过程信息，必须共享
 
 ---
 
@@ -837,6 +902,14 @@ GET  /api/meetings/{id}/resolution
 GET  /api/projects/{id}/decisions     # 获取待CEO抉择的选项
 POST /api/projects/{id}/decisions     # CEO做出抉择
 
+// 裁员管理
+GET  /api/layoff/plan                 # HR生成的裁员方案
+POST /api/layoff/execute              # CEO确认执行裁员
+
+// MCP工具管理
+GET  /api/mcp/available               # 可用MCP工具列表
+POST /api/mcp/install                 # 安装新MCP工具
+
 // 实时通知
 WS   /ws/projects/{id}/events
 ```
@@ -906,6 +979,12 @@ athena/
 │   │   ├── design_tools.go
 │   │   └── review_tools.go
 │   │
+│   ├── mcp/                      # MCP 工具集成
+│   │   ├── registry.go           # MCP Server 注册表
+│   │   ├── manager.go            # MCP 生命周期管理 (下载/配置/启动/停止)
+│   │   ├── stdio_transport.go    # stdio 传输 (优先)
+│   │   └── sse_transport.go      # SSE 传输 (备选，占用端口)
+│   │
 │   ├── api/                      # API 路由
 │   │   ├── projects.go
 │   │   ├── agents.go
@@ -972,13 +1051,13 @@ athena/
 
 ### Phase 2: 黑板与核心 Agent (2 周)
 
-- [ ] 黑板系统实现 (board.go + fact_manager.go)
-- [ ] 事实分级系统 (确定/猜测)
+- [ ] 黑板系统实现 (board.go + fact_manager.go + auxiliary层)
+- [ ] 事实分级系统 (确定/猜测 + 辅助知识共享)
 - [ ] AgentServer (CEO秘书) 实现
-- [ ] HR Agent 实现 (模板化 Agent 创建 + 模板扩展)
+- [ ] HR Agent 实现 (模板化 Agent 创建 + 裁员方案 + 模板扩展)
 - [ ] 项目经理 Agent 实现 (需求拆解 + 不确定性处理)
 - [ ] Developer Agent + 基础工具集
-- [ ] 上下文注入与隔离机制
+- [ ] 上下文注入与隔离机制 (一岗一项目)
 
 ### Phase 3: 会议系统与审查 (2 周)
 
@@ -987,13 +1066,15 @@ athena/
 - [ ] Reviewer Agent + 代码审查流程 (上下文隔离)
 - [ ] 不确定问题上报链路 (Agent → 相关人 → PM → AgentServer → CEO)
 - [ ] CEO抉择 API 与界面
+- [ ] 裁员方案生成与CEO确认界面
 
-### Phase 4: 全角色 Agent + 打磨 (2 周)
+### Phase 4: 全角色 Agent + MCP工具 + 打磨 (2 周)
 
 - [ ] Tester Agent + 测试工具集
 - [ ] Designer Agent + 设计工具集
 - [ ] Ops Agent + 部署工具集
 - [ ] Doc Agent + 文档工具集
+- [ ] MCP 工具集成 (registry + manager + stdio传输)
 - [ ] 语义搜索集成 (ChromaDB)
 - [ ] 完整 Web 管理界面
 - [ ] Agent 状态监控 + 会议可视化
@@ -1002,8 +1083,9 @@ athena/
 
 - [ ] Agent 自我进化 (参考 Hermes Skills)
 - [ ] DAG 任务编排
-- [ ] 多项目并行支持
-- [ ] 外部 MCP 工具集成
+- [ ] 多项目并行支持 (一岗一项目，多项目多Agent)
+- [ ] MCP 工具自动发现与互联网搜索安装
+- [ ] 内部工具开发小组 (工具缺失时自研)
 - [ ] 插件系统
 - [ ] ABANDON 机制 (防止 Agent 陷入死循环)
 - [ ] HR 互联网搜索辅助招聘
@@ -1052,12 +1134,25 @@ athena/
 
 ### Q6: Agent 间沟通与上下文隔离如何平衡？
 
-**A**: 双通道设计——
-- **黑板通道**: 持久化知识（事实、进展、决议），所有 Agent 按权限访问
+**A**: 双通道 + 辅助知识共享——
+- **黑板通道**: 持久化知识（事实、进展、决议、辅助知识），所有 Agent 按权限访问
 - **会议通道**: 实时沟通（讨论、答疑），过程不持久化，只保留决议
+- **辅助知识共享**: 报错日志、关键判断依据等虽属"过程"，但对他人判断有直接帮助，通过黑板辅助层共享
 - 个人工作记忆永远对其他 Agent 不可见
 
----
+### Q7: Agent 缺少工具怎么办？
+
+**A**: 三级解决——
+1. **优先互联网搜索**：找到成熟工具 → 下载配置 → MCP 注册给对应 Agent（stdio优先，不占端口）
+2. **公司内部开发**：搜索不到合适工具 → HR组织开发小组自行开发
+3. **上报CEO**：工具卡点无法解决 → 告知CEO问题所在
+
+### Q8: 公司资源不够时如何裁员？
+
+**A**: HR出方案，CEO点选项——
+1. HR 扫描已完成项目的 Agent、闲置超时 Agent → 生成裁员方案
+2. CEO 在前端界面选择：裁员 / 搁置项目 / 增加上限
+3. 执行裁员：销毁 Agent goroutine、清理上下文、从数据库注销
 
 ## 参考项目
 
@@ -1074,4 +1169,4 @@ athena/
 ---
 
 *本文档是 Athena 项目的规划文档，将随开发进展持续更新。*
-*最后更新: 2026-05-02 (v3: 用户=CEO, AgentServer=CEO秘书)*
+*最后更新: 2026-05-02 (v4: 一岗一项目 + 裁员机制 + 辅助知识共享 + MCP工具配备)*
