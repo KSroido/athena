@@ -39,8 +39,8 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("init database: %w", err)
 	}
 
-	// Create LLM client
-	llm, err := core.NewLLMClient(nil, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model)
+	// Create LLM client with multi-provider fallback
+	llm, err := core.NewLLMClient(nil, &cfg.LLM)
 	if err != nil {
 		return nil, fmt.Errorf("init LLM client: %w", err)
 	}

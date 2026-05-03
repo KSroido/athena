@@ -16,8 +16,8 @@ import (
 // RunInProcess runs the agent loop inside a goroutine (no subprocess)
 // It reads from the AgentHandle channels instead of stdin/stdout
 func (al *AgentLoop) RunInProcess(ctx context.Context, handle *AgentHandle) error {
-	// 1. Use shared LLMClient
-	chatModel := al.cfg.LLM.chatModel
+	// 1. Use shared LLMClient — get primary ChatModel for Eino tool binding
+	chatModel := al.cfg.LLM.PrimaryChatModel()
 
 	// 2. Create Athena tools
 	agentTools, err := al.createTools(ctx)

@@ -53,7 +53,7 @@ func loadConfig(path string) (*config.Config, error) {
 		return cfg, nil
 	}
 
-	// Fall back to environment variables
+	// Fall back to environment variables (single provider mode)
 	cfg := config.DefaultConfig()
 
 	if baseURL := os.Getenv("ATHENA_LLM_BASE_URL"); baseURL != "" {
