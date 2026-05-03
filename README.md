@@ -11,7 +11,7 @@ Athena spawns specialized agents (PM, Developer, Tester, Reviewer, Designer) tha
 ```
 ┌─────────────────────────────────────────────────────┐
 │  CEO (User)                                         │
-│    │ POST /api/chat {"message": "写一个贪吃蛇游戏"}  │
+│    │ POST /api/chat {"message": "build a snake game"}│
 │    ▼                                                │
 │  AgentServer (CEO Secretary)                        │
 │    │ Intent: new_project / update / query / HR      │
@@ -49,12 +49,12 @@ Each agent's system prompt follows a structured 6-layer architecture:
 
 | Layer | Content | Example |
 |-------|---------|---------|
-| 1. Identity | Who I am, which project | "你是 Athena 系统中的项目经理 Agent" |
-| 2. Principles | Core behavioral rules | "需求回溯：每轮验收必须对照CEO原始需求逐条确认" |
-| 3. Workflow | Step-by-step SOP | "1.读取黑板→2.定义验收标准→3.招聘→4.分配任务→5.验收循环" |
-| 4. Tools | When to use which | "submit_for_review: 完成开发后必须使用此工具提交验收" |
-| 5. Constraints | What I cannot do | "禁止未经 file_read 读取文件就判定验收通过" |
-| 6. SelfCheck | Checklist before finish | "是否逐条对照了CEO原始需求？" |
+| 1. Identity | Who I am, which project | "You are the PM Agent in the Athena system" |
+| 2. Principles | Core behavioral rules | "Requirement traceability: every verification round must check against CEO's original requirements item by item" |
+| 3. Workflow | Step-by-step SOP | "1. Read blackboard → 2. Define acceptance criteria → 3. Hire → 4. Assign task → 5. Verification loop" |
+| 4. Tools | When to use which | "submit_for_review: must use this tool after completing development to submit for verification" |
+| 5. Constraints | What I cannot do | "Never mark verification as passed without reading the output file with file_read" |
+| 6. SelfCheck | Checklist before finish | "Have I checked against each item of the CEO's original requirements?" |
 
 ## Requirements
 
@@ -115,8 +115,8 @@ Output:
 
 ```
 =====================================
-  Athena — AI Agent 编排系统
-  像IT公司一样运作
+  Athena — AI Agent Orchestration
+  Runs like a real IT company
 =====================================
 Athena server starting on 0.0.0.0:8080
 Frontend: http://localhost:8080
@@ -130,17 +130,17 @@ Frontend: http://localhost:8080
 # Create a new project (auto-detected as new_project intent)
 curl -X POST http://localhost:8080/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "写一个纯前端的贪吃蛇web小游戏，支持方向键控制"}'
+  -d '{"message": "Build a frontend-only snake game with arrow key controls"}'
 
 # Query project status
 curl -X POST http://localhost:8080/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "项目进展怎么样了"}'
+  -d '{"message": "How is the project going?"}'
 
 # Send new requirement to existing project
 curl -X POST http://localhost:8080/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "给贪吃蛇加上排行榜功能"}'
+  -d '{"message": "Add a leaderboard feature to the snake game"}'
 ```
 
 ### Projects
@@ -152,7 +152,7 @@ curl http://localhost:8080/api/projects
 # Create project manually (bypasses AgentServer)
 curl -X POST http://localhost:8080/api/projects \
   -H "Content-Type: application/json" \
-  -d '{"name": "Snake Game", "original_requirement": "写一个贪吃蛇游戏", "priority": 5}'
+  -d '{"name": "Snake Game", "original_requirement": "Build a snake game", "priority": 5}'
 
 # Get project details
 curl http://localhost:8080/api/projects/{id}
@@ -170,7 +170,7 @@ curl "http://localhost:8080/api/projects/{id}/blackboard?category=verification"
 # Write to blackboard
 curl -X POST http://localhost:8080/api/projects/{id}/blackboard \
   -H "Content-Type: application/json" \
-  -d '{"category": "fact", "content": "API接口使用RESTful风格", "certainty": "certain", "author": "ceo"}'
+  -d '{"category": "fact", "content": "API uses RESTful style", "certainty": "certain", "author": "ceo"}'
 ```
 
 **Blackboard categories:**
@@ -206,7 +206,7 @@ curl http://localhost:8080/api/company
 # Hire an agent manually
 curl -X POST http://localhost:8080/api/company/hire \
   -H "Content-Type: application/json" \
-  -d '{"role": "developer", "project_id": "abc123", "reason": "需要开发工程师"}'
+  -d '{"role": "developer", "project_id": "abc123", "reason": "Need a developer"}'
 ```
 
 **Available roles:** `pm`, `developer`, `tester`, `reviewer`, `designer`
