@@ -108,7 +108,7 @@ func (al *AgentLoop) runReActLoop(
 					ID:        generateUUID(),
 					ProjectID: al.cfg.ProjectID,
 					Category:  "progress",
-					Content:   fmt.Sprintf("[Agent %s 完成当前轮次] %s", al.cfg.AgentID, truncateStr(response.Content, 500)),
+					Content:   fmt.Sprintf("[Agent %s 完成当前轮次] %s", al.cfg.AgentID, truncateStr(cleanContent(response.Content), 500)),
 					Certainty: "certain",
 					Author:    al.cfg.AgentID,
 				})

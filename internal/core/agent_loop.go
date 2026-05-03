@@ -367,3 +367,57 @@ func truncateStr(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "..."
 }
+
+// cleanContent removes LLM-specific tags (thinking, tool_call markers) from
+// response content before writing to the blackboard or returning to users.
+// Many models (DeepSeek, GLM, Qwen) emit <think>...</think> blocks or
+// similar markers in their text output that should not leak into shared state.
+func cleanContent(s string) string {
+	// Remove <think>...</think> blocks (including multiline)
+	for {
+		start := strings.Index(s, "<think>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s, "</think>")
+		if end == -1 || end < start {
+			// Unclosed tag — remove from <think> to end
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end+len("</think>"):]
+	}
+
+	// Remove <thinking>...</thinking> blocks
+	for {
+		start := strings.Index(s, "<thinking>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s, "</thinking>")
+		if end == -1 || end < start {
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end+len("</thinking>"):]
+	}
+
+	// Remove ◁think▷...◁/think▷ blocks (some models use non-ASCII markers)
+	for {
+		start := strings.Index(s, "◁think▷")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s, "◁/think▷")
+		if end == -1 || end < start {
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end+len("◁/think▷"):]
+	}
+
+	// Clean up excessive whitespace left after tag removal
+	s = strings.TrimSpace(s)
+
+	return s
+}

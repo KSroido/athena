@@ -112,7 +112,7 @@ CEO消息: %s
 	}
 
 	var intent RecognizedIntent
-	content := resp.Content
+	content := cleanContent(resp.Content)
 	start := strings.Index(content, "{")
 	end := strings.LastIndex(content, "}")
 	if start >= 0 && end > start {
@@ -298,7 +298,7 @@ func (as *AgentServer) handleGeneral(ctx context.Context, message string) (strin
 	if err != nil {
 		return "", err
 	}
-	return resp.Content, nil
+	return cleanContent(resp.Content), nil
 }
 
 // listProjects returns all projects from the database
