@@ -24,6 +24,7 @@ type AgentLoopConfig struct {
 	ProjectID string
 	DataDir   string
 	LLM       *LLMClient // Reuse the shared LLMClient
+	HR        *hr.HR     // HR instance for role resolution
 
 	// Callbacks for tools (injected by AgentManager)
 	TaskFunc     func(agentID, taskID, content, fromAgent string) error
@@ -86,8 +87,9 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 
 	// Role-specific tools
 	workspaceDir := filepath.Join(al.cfg.DataDir, "workspace", al.cfg.ProjectID)
+	category := hr.InferCategory(al.cfg.Role)
 
-	switch al.cfg.Role {
+	switch category {
 	case "pm":
 		// PM gets assign_task and hr_request
 		if al.cfg.TaskFunc != nil && al.cfg.MainDB != nil {
@@ -112,10 +114,10 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 		fileWrite, err := tools.NewFileWriteTool(workspaceDir)
 		if err == nil {
 			agentTools = append(agentTools, fileWrite)
-		}
+	}
 
-	case "developer", "tester":
-		// Developer and tester get term, file_read, file_write
+	case "dev":
+		// All dev.* roles get term, file_read, file_write, submit_for_review
 		termTool, err := tools.NewTermExecTool(workspaceDir)
 		if err != nil {
 			return nil, fmt.Errorf("create term tool: %w", err)
@@ -134,7 +136,36 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 		}
 		agentTools = append(agentTools, fileWrite)
 
-		// Developer gets submit_for_review to trigger PM verification
+		// Dev roles get submit_for_review to trigger PM verification
+		if al.cfg.NotifyPMFunc != nil {
+			submitReview, err := tools.NewSubmitForReviewTool(al.cfg.DataDir, al.cfg.ProjectID, al.cfg.AgentID, al.cfg.NotifyPMFunc)
+			if err != nil {
+				return nil, fmt.Errorf("create submit_for_review tool: %w", err)
+			}
+			agentTools = append(agentTools, submitReview)
+		}
+
+	case "tester":
+		// All tester* roles get term, file_read, file_write
+		termTool, err := tools.NewTermExecTool(workspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("create term tool: %w", err)
+		}
+		agentTools = append(agentTools, termTool)
+
+		fileRead, err := tools.NewFileReadTool(workspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("create file_read tool: %w", err)
+		}
+		agentTools = append(agentTools, fileRead)
+
+		fileWrite, err := tools.NewFileWriteTool(workspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("create file_write tool: %w", err)
+		}
+		agentTools = append(agentTools, fileWrite)
+
+		// Tester roles also get submit_for_review
 		if al.cfg.NotifyPMFunc != nil {
 			submitReview, err := tools.NewSubmitForReviewTool(al.cfg.DataDir, al.cfg.ProjectID, al.cfg.AgentID, al.cfg.NotifyPMFunc)
 			if err != nil {
@@ -152,7 +183,7 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 		agentTools = append(agentTools, fileRead)
 
 	case "designer":
-		// Designer gets file_read and file_write
+		// All designer* roles get file_read and file_write
 		fileRead, err := tools.NewFileReadTool(workspaceDir)
 		if err == nil {
 			agentTools = append(agentTools, fileRead)
@@ -194,11 +225,17 @@ func (al *AgentLoop) executeToolCall(ctx context.Context, agentTools []tool.Invo
 
 // buildSystemPrompt constructs the system prompt using the 6-layer architecture
 func (al *AgentLoop) buildSystemPrompt() string {
-	// Layers 1-6 from prompts.go
-	prompt := BuildRolePrompt(al.cfg.Role, al.cfg.AgentID, al.cfg.ProjectID)
+	// Layers 1-6 from prompts.go (with dynamic soul resolution)
+	prompt := BuildRolePrompt(al.cfg.Role, al.cfg.AgentID, al.cfg.ProjectID, al.cfg.DataDir, al.cfg.HR)
 
 	// Append Layer 7: Project context from blackboard
 	prompt += buildBlackboardContext(al.cfg.DataDir, al.cfg.ProjectID)
+
+	// Append Layer 8: Available roles catalog (for PM)
+	if al.cfg.Role == "pm" && al.cfg.HR != nil {
+		prompt += "\n# 可招聘角色\n\n"
+		prompt += al.cfg.HR.RoleCatalog()
+	}
 
 	return prompt
 }
@@ -274,8 +311,8 @@ func buildBlackboardContext(dataDir, projectID string) string {
 }
 
 // BuildAgentPrompt builds the full system prompt for an agent (used by context_builder)
-func BuildAgentPrompt(agentID, role, projectID string, board *blackboard.Board) string {
-	prompt := BuildRolePrompt(role, agentID, projectID)
+func BuildAgentPrompt(agentID, role, projectID, dataDir string, hrInstance *hr.HR, board *blackboard.Board) string {
+	prompt := BuildRolePrompt(role, agentID, projectID, dataDir, hrInstance)
 
 	// Append blackboard context
 	if board != nil {

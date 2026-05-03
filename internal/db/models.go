@@ -74,6 +74,12 @@ type BlackboardEntry struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+// LLMResponse represents a response from the LLM
+type LLMResponse struct {
+	Content string `json:"content"`
+	Role    string `json:"role,omitempty"`
+}
+
 // Meeting represents a meeting
 type Meeting struct {
 	ID                 string     `json:"id"`

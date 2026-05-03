@@ -63,10 +63,33 @@ func NewAgentManager(llm *LLMClient, mainDB *db.DB, dataDir string) *AgentManage
 	return am
 }
 
-// SetHR sets the HR instance and initializes the hire callback
+// SetHR sets the HR instance and initializes the hire callback.
+// Also injects the LLM adapter for dynamic soul generation.
 func (am *AgentManager) SetHR(h *hr.HR) {
 	am.hr = h
 	am.hireFunc = h.Hire
+
+	// Inject LLM adapter for HR soul generation
+	if am.llmConfig != nil {
+		h.SetLLM(&llmCallerAdapter{client: am.llmConfig})
+	}
+}
+
+// llmCallerAdapter adapts core.LLMClient to hr.LLMCaller interface.
+// Defined here to avoid circular imports between hr and core packages.
+type llmCallerAdapter struct {
+	client *LLMClient
+}
+
+func (a *llmCallerAdapter) ChatWithSystem(ctx context.Context, system, user string) (*db.LLMResponse, error) {
+	msg, err := a.client.ChatWithSystem(ctx, system, user)
+	if err != nil {
+		return nil, err
+	}
+	return &db.LLMResponse{
+		Content: msg.Content,
+		Role:    string(msg.Role),
+	}, nil
 }
 
 // StartAgent launches a new Agent goroutine
@@ -98,6 +121,7 @@ func (am *AgentManager) StartAgent(agent *db.Agent, projectID string) error {
 		ProjectID:    projectID,
 		DataDir:      am.dataDir,
 		LLM:          am.llmConfig,
+		HR:           am.hr,
 		MainDB:       am.mainDB,
 		TaskFunc:     am.SendTask,
 		HireFunc:     am.hireFunc,

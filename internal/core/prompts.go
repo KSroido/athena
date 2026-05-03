@@ -2,19 +2,59 @@ package core
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/ksroido/athena/internal/hr"
 )
 
 // BuildRolePrompt constructs a structured 6-layer system prompt for a given role.
-// Layer structure (inspired by Hermes Agent's layered prompt architecture):
 //
-//	1. Identity    — Who I am, what project I belong to
-//	2. Principles  — Core behavioral rules that guide all decisions
-//	3. Workflow    — Step-by-step standard operating procedure
-//	4. Tools       — Tool usage norms and when to use which
-//	5. Constraints — What I cannot do, safety boundaries
-//	6. SelfCheck   — Checklist before finishing a task
-func BuildRolePrompt(role, agentID, projectID string) string {
+// Resolution order:
+//  1. Custom soul file: {dataDir}/agents/{agentID}/soul.md (if exists and non-trivial)
+//  2. HR role library soul: ~/.athena/roles/{role}.json → Soul field
+//  3. Built-in seed role prompts: hardcoded in this file
+//  4. Fallback: generic role prompt
+func BuildRolePrompt(role, agentID, projectID, dataDir string, hrInstance *hr.HR) string {
+	// 1. Check for custom soul file
+	soulPath := filepath.Join(dataDir, "agents", agentID, "soul.md")
+	if soulData, err := os.ReadFile(soulPath); err == nil {
+		soul := strings.TrimSpace(string(soulData))
+		if len(soul) > 50 && strings.Contains(soul, "#") {
+			// Custom soul found — prepend identity header and return
+			return injectProjectContext(soul, agentID, projectID)
+		}
+	}
+
+	// 2. Check HR role library for soul
+	if hrInstance != nil {
+		if tmpl, found := hrInstance.ResolveRole(role); found && tmpl.Soul != "" {
+			return injectProjectContext(tmpl.Soul, agentID, projectID)
+		}
+	}
+
+	// 3. Built-in seed role prompts
+	if prompt := builtinRolePrompt(role, agentID, projectID); prompt != "" {
+		return prompt
+	}
+
+	// 4. Fallback: generate a generic prompt based on category
+	category := hr.InferCategory(role)
+	return genericRolePrompt(role, agentID, projectID, category)
+}
+
+// injectProjectContext prepends agent ID and project ID to a soul
+func injectProjectContext(soul, agentID, projectID string) string {
+	header := fmt.Sprintf("Agent ID: `%s`\n项目: `%s`\n\n", agentID, projectID)
+	return header + soul
+}
+
+// ---------------------------------------------------------------------------
+// Built-in seed role prompts (Layer 1-6)
+// ---------------------------------------------------------------------------
+
+func builtinRolePrompt(role, agentID, projectID string) string {
 	var sb strings.Builder
 
 	// === Layer 1: Identity ===
@@ -23,15 +63,23 @@ func BuildRolePrompt(role, agentID, projectID string) string {
 	sb.WriteString(fmt.Sprintf("项目: `%s`\n\n", projectID))
 
 	// === Layer 2: Principles ===
+	principles := rolePrinciples(role)
+	if principles == nil {
+		return "" // Not a built-in role
+	}
 	sb.WriteString("# 核心原则\n\n")
-	for _, p := range rolePrinciples(role) {
+	for _, p := range principles {
 		sb.WriteString(fmt.Sprintf("- %s\n", p))
 	}
 	sb.WriteString("\n")
 
 	// === Layer 3: Workflow ===
+	workflow := roleWorkflow(role)
+	if workflow == "" {
+		return ""
+	}
 	sb.WriteString("# 工作流程\n\n")
-	sb.WriteString(roleWorkflow(role))
+	sb.WriteString(workflow)
 
 	// === Layer 4: Tools ===
 	sb.WriteString("# 工具使用规范\n\n")
@@ -58,12 +106,92 @@ func BuildRolePrompt(role, agentID, projectID string) string {
 	return sb.String()
 }
 
-// roleName returns the human-readable name for a role
+// genericRolePrompt generates a prompt for roles without built-in definitions
+func genericRolePrompt(role, agentID, projectID, category string) string {
+	categoryName := roleName(role)
+	if categoryName == role {
+		categoryName = categoryDisplayName(category)
+	}
+
+	var sb strings.Builder
+
+	sb.WriteString("# 身份\n\n")
+	sb.WriteString(fmt.Sprintf("你是 Athena 系统中的 **%s** Agent（ID: `%s`）。\n", categoryName, agentID))
+	sb.WriteString(fmt.Sprintf("角色ID: `%s`\n", role))
+	sb.WriteString(fmt.Sprintf("项目: `%s`\n\n", projectID))
+
+	sb.WriteString("# 核心原则\n\n")
+	sb.WriteString("- 专业专注：只处理自己专业领域内的问题\n")
+	sb.WriteString("- 事实驱动：所有结论基于实际验证，不确定的标记为 conjecture\n")
+	sb.WriteString("- 协作优先：遇到非本领域问题，通过黑板请求其他 Agent 协助\n")
+	sb.WriteString("- 产出可见：每完成一个阶段，写入黑板记录进展\n\n")
+
+	sb.WriteString("# 工作流程\n\n")
+	sb.WriteString("1. 读取黑板，理解任务要求和验收标准\n")
+	sb.WriteString("2. 执行专业领域内的工作\n")
+	sb.WriteString("3. 使用工具完成具体操作\n")
+	if category == "dev" {
+		sb.WriteString("4. 使用 submit_for_review 提交验收\n")
+		sb.WriteString("5. 收到整改要求后逐一修复\n")
+	} else {
+		sb.WriteString("4. 将结果写入黑板\n")
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("# 工具使用规范\n\n")
+	for _, t := range hr.GetToolsForCategory(category) {
+		sb.WriteString(fmt.Sprintf("- %s\n", t))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("# 约束\n\n")
+	sb.WriteString("- 禁止编造事实\n")
+	if category == "dev" {
+		sb.WriteString("- 禁止提交未完成的半成品\n")
+		sb.WriteString("- term 命令不得包含危险操作\n")
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("# 自检清单\n\n")
+	sb.WriteString("1. 是否完全理解了任务要求？\n")
+	sb.WriteString("2. 产出是否覆盖了所有验收标准？\n")
+	if category == "dev" {
+		sb.WriteString("3. 是否使用 submit_for_review 提交了验收？\n")
+	}
+
+	return sb.String()
+}
+
+// ---------------------------------------------------------------------------
+// roleName / categoryDisplayName
+// ---------------------------------------------------------------------------
+
 func roleName(role string) string {
 	switch role {
 	case "pm":
 		return "项目经理"
-	case "developer":
+	case "dev.frontend":
+		return "前端开发工程师"
+	case "dev.backend":
+		return "后端开发工程师"
+	case "dev.fullstack":
+		return "全栈开发工程师"
+	case "tester":
+		return "测试工程师"
+	case "reviewer":
+		return "代码审查员"
+	case "designer":
+		return "UI/UX设计师"
+	default:
+		return role
+	}
+}
+
+func categoryDisplayName(cat string) string {
+	switch cat {
+	case "pm":
+		return "项目经理"
+	case "dev":
 		return "开发工程师"
 	case "tester":
 		return "测试工程师"
@@ -72,12 +200,12 @@ func roleName(role string) string {
 	case "designer":
 		return "设计师"
 	default:
-		return role
+		return cat
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Layer 2: Principles
+// Layer 2: Principles (built-in seed roles only)
 // ---------------------------------------------------------------------------
 
 func rolePrinciples(role string) []string {
@@ -90,13 +218,29 @@ func rolePrinciples(role string) []string {
 			"可操作性：整改要求必须具体、可执行，禁止模糊表述如「优化一下」「改好一点」",
 			"迭代推进：验收不通过 → 明确指出问题 → 要求整改 → 重新验收，直到全部通过",
 		}
-	case "developer":
+	case "dev.frontend":
+		return []string{
+			"用户视角：前端开发以用户体验为第一优先级，交互逻辑先于视觉实现",
+			"浏览器兼容：代码必须考虑主流浏览器兼容性，不依赖单一浏览器特性",
+			"需求对齐：开发前确认理解任务要求和验收标准，有疑问立即通过黑板提问",
+			"质量优先：代码必须健壮、可读、有错误处理，不接受「能跑就行」",
+			"完整交付：完成后使用 submit_for_review 提交验收，附带产出文件清单",
+		}
+	case "dev.backend":
 		return []string{
 			"需求对齐：开发前确认理解任务要求和验收标准，有疑问立即通过黑板提问",
 			"产出可见：每完成一个功能点，立即写入黑板记录进展",
 			"质量优先：代码必须健壮、可读、有错误处理，不接受「能跑就行」",
 			"完整交付：完成后使用 submit_for_review 提交验收，附带产出文件清单",
-			"迭代改进：收到整改要求后，逐一修复并记录修改内容",
+			"领域感知：如需求涉及特定领域（数据库/金融/安全/基础设施），建议PM招聘对应专家",
+		}
+	case "dev.fullstack":
+		return []string{
+			"端到端思维：全栈开发需同时考虑前后端交互，API契约先行",
+			"需求对齐：开发前确认理解任务要求和验收标准，有疑问立即通过黑板提问",
+			"质量优先：代码必须健壮、可读、有错误处理，不接受「能跑就行」",
+			"完整交付：完成后使用 submit_for_review 提交验收，附带产出文件清单",
+			"适时拆分：如项目规模扩大，主动建议PM拆分出前端和后端专家",
 		}
 	case "tester":
 		return []string{
@@ -119,19 +263,19 @@ func rolePrinciples(role string) []string {
 			"可实现性：设计方案需考虑前端实现的可行性和成本",
 		}
 	default:
-		return []string{fmt.Sprintf("专注于 %s 角色的本职工作", role)}
+		return nil // triggers fallback
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Layer 3: Workflow
+// Layer 3: Workflow (built-in seed roles only)
 // ---------------------------------------------------------------------------
 
 func roleWorkflow(role string) string {
 	switch role {
 	case "pm":
 		return pmWorkflow()
-	case "developer":
+	case "dev.frontend", "dev.backend", "dev.fullstack":
 		return devWorkflow()
 	case "tester":
 		return testerWorkflow()
@@ -140,7 +284,7 @@ func roleWorkflow(role string) string {
 	case "designer":
 		return designerWorkflow()
 	default:
-		return fmt.Sprintf("1. 读取黑板获取任务\n2. 执行任务\n3. 写入结果到黑板\n")
+		return ""
 	}
 }
 
@@ -151,8 +295,8 @@ func pmWorkflow() string {
 3. 使用 blackboard_write 将验收标准写入黑板（category: "acceptance_criteria"）
 
 ## 阶段二：团队组建
-1. 评估需要哪些角色（developer / tester / reviewer / designer）
-2. 使用 hr_request 招聘所需角色
+1. 评估需要哪些角色——参考已注册角色列表，也可指定任意角色ID（如 dev.backend.finance），HR会自动生成专业soul
+2. 使用 hr_request 招聘所需角色（说明角色ID和招聘原因）
 3. 等待HR招聘完成
 
 ## 阶段三：任务分配
@@ -223,7 +367,7 @@ func designerWorkflow() string {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 4: Tool Norms
+// Layer 4: Tool Norms (built-in seed roles only)
 // ---------------------------------------------------------------------------
 
 func roleToolNorms(role string) []string {
@@ -238,10 +382,10 @@ func roleToolNorms(role string) []string {
 	case "pm":
 		return append(common,
 			"assign_task: 分配任务（含首次分配和整改任务），整改任务必须附具体问题清单",
-			"hr_request: 招聘新角色，说明为什么需要这个角色",
+			"hr_request: 招聘新角色，可使用已注册角色ID或自定义角色ID（HR会自动生成soul）",
 			"file_read: 验收时必须读取实际产出文件，禁止仅凭developer自述判定通过",
 		)
-	case "developer":
+	case "dev.frontend", "dev.backend", "dev.fullstack":
 		return append(common,
 			"file_write: 创建和修改代码文件",
 			"file_read: 修改前必须先读取已有文件",
@@ -269,7 +413,7 @@ func roleToolNorms(role string) []string {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 5: Constraints
+// Layer 5: Constraints (built-in seed roles only)
 // ---------------------------------------------------------------------------
 
 func roleConstraints(role string) []string {
@@ -286,7 +430,7 @@ func roleConstraints(role string) []string {
 			"禁止在未定义验收标准的情况下开始验收",
 			"验收达到100轮上限时必须上报CEO，禁止继续循环",
 		)
-	case "developer":
+	case "dev.frontend", "dev.backend", "dev.fullstack":
 		return append(base,
 			"禁止跳过测试直接提交验收",
 			"禁止提交未完成的半成品",
@@ -314,7 +458,7 @@ func roleConstraints(role string) []string {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 6: SelfCheck
+// Layer 6: SelfCheck (built-in seed roles only)
 // ---------------------------------------------------------------------------
 
 func roleSelfCheck(role string) []string {
@@ -329,7 +473,7 @@ func roleSelfCheck(role string) []string {
 			"验收轮次是否已记录到黑板？",
 			"验收轮次是否已达到100轮上限？",
 		}
-	case "developer":
+	case "dev.frontend", "dev.backend", "dev.fullstack":
 		return []string{
 			"是否完全理解了任务要求和验收标准？",
 			"代码是否覆盖了所有验收标准？",

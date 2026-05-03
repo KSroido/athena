@@ -23,7 +23,7 @@ import (
 
 // AssignTaskInput is the input for the assign_task tool
 type AssignTaskInput struct {
-	AgentRole string `json:"agent_role" jsonschema:"description=Target agent role (developer/tester/reviewer/designer),required"`
+	AgentRole string `json:"agent_role" jsonschema:"description=Target agent role ID (e.g. dev.frontend, dev.backend, dev.backend.finance, tester, reviewer, designer). Matches the role used in hr_request.,required"`
 	TaskTitle string `json:"task_title" jsonschema:"description=Short task title,required"`
 	TaskDesc  string `json:"task_desc" jsonschema:"description=Detailed task description,required"`
 	Priority  int    `json:"priority" jsonschema:"description=Task priority 1-10. Default 5."`
@@ -110,30 +110,35 @@ func NewAssignTaskTool(projectID, pmAgentID string, mainDB *db.DB, taskFunc func
 
 // HRRequestInput is the input for the hr_request tool
 type HRRequestInput struct {
-	Role   string `json:"role" jsonschema:"description=Role to hire (developer/tester/reviewer/designer),required"`
-	Reason string `json:"reason" jsonschema:"description=Why this role is needed,required"`
+	Role       string `json:"role" jsonschema:"description=Role ID to hire. Can be a registered role (e.g. dev.frontend, dev.backend, tester, reviewer, designer) or any custom role ID (e.g. dev.backend.finance, dev.backend.security, tester.security, designer.visual). HR will auto-generate a professional soul for custom roles.,required"`
+	Speciality string `json:"speciality" jsonschema:"description=Speciality hint for LLM soul generation. E.g. '金融量化交易系统开发', '渗透测试与漏洞扫描', '品牌视觉与CSS动效'. Optional for registered roles, required for custom roles to ensure soul quality."`
+	Reason     string `json:"reason" jsonschema:"description=Why this role is needed for the project,required"`
 }
 
 // HRRequestOutput is the output for the hr_request tool
 type HRRequestOutput struct {
 	AgentID string `json:"agent_id"`
+	Role    string `json:"role"`
+	Name    string `json:"name"`
 	Message string `json:"message"`
 }
 
-// NewHRRequestTool creates a tool for agents to request HR to hire new agents
+// NewHRRequestTool creates a tool for agents to request HR to hire new agents.
+// Supports both registered roles and dynamic custom roles.
 func NewHRRequestTool(projectID string, hireFunc func(req *hr.HireRequest) (*db.Agent, error)) (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"hr_request",
-		"Request HR to hire a new agent for the project. Use when you need a role that doesn't exist yet.",
+		"Request HR to hire a new agent for the project. You can use registered role IDs (dev.frontend, dev.backend, tester, etc.) OR specify any custom role ID (e.g. dev.backend.finance, dev.backend.security, tester.security). For custom roles, provide a speciality description so HR can generate a professional soul. HR will automatically create and save the role definition for future reuse.",
 		func(ctx context.Context, input HRRequestInput) (*HRRequestOutput, error) {
 			if hireFunc == nil {
 				return nil, fmt.Errorf("HR function not available")
 			}
 
 			agent, err := hireFunc(&hr.HireRequest{
-				Role:      input.Role,
-				ProjectID: projectID,
-				Reason:    input.Reason,
+				Role:       input.Role,
+				Speciality: input.Speciality,
+				ProjectID:  projectID,
+				Reason:     input.Reason,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("HR hire failed: %v", err)
@@ -141,7 +146,9 @@ func NewHRRequestTool(projectID string, hireFunc func(req *hr.HireRequest) (*db.
 
 			return &HRRequestOutput{
 				AgentID: agent.ID,
-				Message: fmt.Sprintf("HR已招聘 %s (%s)", agent.Name, agent.ID),
+				Role:    agent.Role,
+				Name:    agent.Name,
+				Message: fmt.Sprintf("HR已招聘 %s (%s, 角色: %s)", agent.Name, agent.ID, agent.Role),
 			}, nil
 		},
 	)
