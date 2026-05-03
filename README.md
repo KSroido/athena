@@ -1,17 +1,47 @@
 **[English](README.md)** | [中文文档](README_ZH.md)
 
+<div align="center">
+
 # Athena
 
-AI Agent orchestration system that operates like a real IT company.
+**Multi-Agent Orchestration System that runs like a real IT company**
 
-Athena spawns specialized agents (PM, Developer, Tester, Reviewer, Designer) that collaborate through a blackboard architecture — with structured prompts, multi-round verification loops, and escalation mechanisms.
+[![GitHub stars](https://img.shields.io/github/stars/KSroido/athena?style=social)](https://github.com/KSroido/athena/stargazers)
+[![GitHub license](https://img.shields.io/github/license/KSroido/athena)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ksroido/athena)](https://goreportcard.com/report/github.com/ksroido/athena)
+[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)](https://go.dev/)
+
+📖 [Architecture](#architecture) · 🚀 [Quick Start](#quick-start) · 🔧 [Configuration](#configure) · 📡 [API Reference](#api-reference) · 🤝 [Contributing](#contributing)
+
+</div>
+
+---
+
+> **Athena** spawns specialized agents — PM, Developer, Tester, Reviewer, Designer — that collaborate through a blackboard architecture with structured prompts, multi-round verification loops, and escalation mechanisms.
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=KSroido/athena&type=Date)](https://star-history.com/#KSroido/athena&Date)
+
+## 🌟 Why Athena?
+
+| Feature | Description |
+|---------|-------------|
+| **IT Company Model** | Agents act like real roles: PM defines requirements, Developer codes, Tester verifies, Reviewer audits |
+| **Blackboard Architecture** | Shared memory with structured categories (goal, fact, criteria, verification, decision) |
+| **Verification Loop** | PM reads output files and checks against acceptance criteria line-by-line — no rubber-stamping |
+| **6-Layer Agent Soul** | Structured prompts: Identity → Principles → Workflow → Tools → Constraints → SelfCheck |
+| **Multi-Provider LLM** | Built-in fallback chain with 429 detection, automatic cooldown, and provider rotation |
+| **Dynamic HR** | Hire any role on demand — HR generates specialized souls via LLM, with project-aware fitness checks |
+| **100-Round Escalation** | Verification loops capped at 100 rounds; PM escalates to CEO for decision |
+| **Go + SQLite** | Single binary, zero external dependencies. FTS5-powered blackboard search |
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │  CEO (User)                                         │
-│    │ POST /api/chat {"message": "build a snake game"}│
+│    │ POST /api/chat {"message": "build snake game"} │
 │    ▼                                                │
 │  AgentServer (CEO Secretary)                        │
 │    │ Intent: new_project / update / query / HR      │
@@ -56,21 +86,23 @@ Each agent's system prompt follows a structured 6-layer architecture:
 | 5. Constraints | What I cannot do | "Never mark verification as passed without reading the output file with file_read" |
 | 6. SelfCheck | Checklist before finish | "Have I checked against each item of the CEO's original requirements?" |
 
-## Requirements
+## Quick Start
+
+### Requirements
 
 - Go 1.25+
 - GCC (for CGO / go-sqlite3)
-- An OpenAI-compatible LLM API (OpenAI, Azure, Tencent LKEAP, etc.)
+- An OpenAI-compatible LLM API
 
-## Install
+### Install
 
 ```bash
 git clone https://github.com/KSroido/athena.git
 cd athena
-go build -o athena ./cmd/athena
+CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" go build -o athena ./cmd/athena
 ```
 
-## Configure
+### Configure
 
 Create `config/athena.yaml`:
 
@@ -80,32 +112,36 @@ server:
   port: 8080
 
 llm:
-  base_url: "https://api.openai.com/v1"   # OpenAI-compatible endpoint
-  api_key: "sk-..."                        # Your API key
-  model: "gpt-4o"                          # Model with tool calling support
+  max_retries: 3
+  retry_cooldown: 30
+  providers:
+    - base_url: "https://api.openai.com/v1"
+      api_key: "sk-..."
+      model: "gpt-4o"
+      weight: 100
+    # Fallback provider (optional)
+    - base_url: "https://api.deepseek.com/v1"
+      api_key: "sk-..."
+      model: "deepseek-chat"
+      weight: 50
 
 company:
-  max_agents: 100       # Company headcount limit
+  max_agents: 100
   max_memory_mb: 16384
 
 agents:
-  data_dir: "./data"    # Project workspace + blackboard + agent memory
-
-logging:
-  level: "info"
-  file: "./data/logs/athena.log"
+  data_dir: "./data"
 ```
 
-Alternatively, configure via environment variables:
+Environment variables also supported:
 
 ```bash
 export ATHENA_LLM_BASE_URL="https://api.openai.com/v1"
 export ATHENA_LLM_API_KEY="sk-..."
 export ATHENA_LLM_MODEL="gpt-4o"
-export ATHENA_PORT=8080
 ```
 
-## Run
+### Run
 
 ```bash
 ./athena -config config/athena.yaml
@@ -118,8 +154,18 @@ Output:
   Athena — AI Agent Orchestration
   Runs like a real IT company
 =====================================
+[llm] initialized provider: https://api.openai.com/v1/gpt-4o (weight=100)
 Athena server starting on 0.0.0.0:8080
 Frontend: http://localhost:8080
+```
+
+### Try It
+
+```bash
+# Create a project
+curl -X POST http://localhost:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Build a frontend-only snake game with arrow key controls"}'
 ```
 
 ## API Reference
@@ -149,7 +195,7 @@ curl -X POST http://localhost:8080/api/chat \
 # List all projects
 curl http://localhost:8080/api/projects
 
-# Create project manually (bypasses AgentServer)
+# Create project manually
 curl -X POST http://localhost:8080/api/projects \
   -H "Content-Type: application/json" \
   -d '{"name": "Snake Game", "original_requirement": "Build a snake game", "priority": 5}'
@@ -161,11 +207,8 @@ curl http://localhost:8080/api/projects/{id}
 ### Blackboard
 
 ```bash
-# Read blackboard entries (all categories)
+# Read blackboard entries
 curl http://localhost:8080/api/projects/{id}/blackboard
-
-# Read specific category
-curl "http://localhost:8080/api/projects/{id}/blackboard?category=verification"
 
 # Write to blackboard
 curl -X POST http://localhost:8080/api/projects/{id}/blackboard \
@@ -213,8 +256,6 @@ curl -X POST http://localhost:8080/api/company/hire \
 
 ## Agent Tools
 
-Each role receives a specific set of tools:
-
 | Tool | PM | Developer | Tester | Reviewer | Designer |
 |------|:--:|:---------:|:------:|:--------:|:--------:|
 | `blackboard_read` | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -230,8 +271,6 @@ Each role receives a specific set of tools:
 | `submit_for_review` | | ✅ | | | |
 
 ## Verification Loop
-
-The PM verification process follows this state machine:
 
 ```
                   ┌─────────────────────┐
@@ -278,10 +317,27 @@ The PM verification process follows this state machine:
                     └──▶ loop back to PM verifies
 ```
 
-- Each round is tracked in blackboard (`category: verification`)
-- Round ≥80: warning injected into PM steer message
-- Round ≥100: PM must write `[ESCALATION]` and stop the loop
-- CEO can then decide to: relax criteria, change developer, or cancel project
+## LLM Compatibility
+
+Athena uses Eino's OpenAI-compatible client with **multi-provider fallback**. Any provider supporting OpenAI Chat Completions API with tool calling works:
+
+| Provider | base_url | Notes |
+|----------|----------|-------|
+| OpenAI | `https://api.openai.com/v1` | gpt-4o, gpt-4o-mini |
+| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{model}` | |
+| Volcengine Ark | `https://ark.cn-beijing.volces.com/api/v3` | Doubao, GLM |
+| Tencent LKEAP | `https://api.lkeap.cloud.tencent.com/plan/v3` | glm-5.1 |
+| DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat |
+| Local (Ollama) | `http://localhost:11434/v1` | Must support tool calling |
+| Local (vLLM) | `http://localhost:8000/v1` | |
+
+**Requirement:** The model must support OpenAI-style function/tool calling.
+
+**Fallback features:**
+- 429/rate-limit detection with per-provider cooldown
+- Automatic provider rotation on failure
+- Configurable retry count and cooldown duration
+- Retry-After header parsing
 
 ## Project Structure
 
@@ -300,12 +356,12 @@ athena/
 │   │   ├── agent_loop_v2.go     # RunInProcess + verification steer
 │   │   ├── agent_manager.go     # Goroutine-based agent lifecycle
 │   │   ├── agent_server.go      # CEO Secretary (intent routing)
-│   │   ├── llm_client.go        # Eino OpenAI-compatible client
+│   │   ├── llm_client.go        # Multi-provider LLM with 429 fallback
 │   │   └── prompts.go           # 6-layer structured prompts
 │   ├── db/
 │   │   ├── database.go          # Main SQLite DB
 │   │   └── models.go            # Data models
-│   ├── hr/hr.go                 # Hiring + role templates
+│   ├── hr/hr.go                 # Hiring + role templates + fitness check
 │   ├── server/server.go         # Gin HTTP server
 │   └── tools/
 │       ├── eino_tools.go        # Blackboard read/write tools
@@ -317,20 +373,15 @@ athena/
     └── agents/{agent_id}/       # Agent memory (memory.md)
 ```
 
-## LLM Compatibility
+## Contributing
 
-Athena uses Eino's OpenAI-compatible client. Any provider supporting the OpenAI Chat Completions API with **tool calling** works:
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-| Provider | base_url | Notes |
-|----------|----------|-------|
-| OpenAI | `https://api.openai.com/v1` | gpt-4o, gpt-4o-mini |
-| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{model}` | |
-| Tencent LKEAP | `https://api.lkeap.cloud.tencent.com/plan/v3` | glm-5.1 |
-| DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat |
-| Local (Ollama) | `http://localhost:11434/v1` | Must support tool calling |
-| Local (vLLM) | `http://localhost:8000/v1` | |
-
-**Requirement:** The model must support OpenAI-style function/tool calling. Models without tool calling support will not work.
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## Development
 
@@ -347,4 +398,4 @@ air
 
 ## License
 
-MIT
+[MIT](LICENSE)

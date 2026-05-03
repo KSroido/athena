@@ -1,80 +1,108 @@
-**[English](README.md)** | [中文文档](README_ZH.md)
+**[中文文档](README_ZH.md)** | [English](README.md)
+
+<div align="center">
 
 # Athena
 
-像真实IT公司一样运作的 AI Agent 编排系统。
+**像真实IT公司一样运作的多智能体编排系统**
 
-Athena 启动专业化 Agent（PM、Developer、Tester、Reviewer、Designer），通过黑板架构协作——具备结构化提示词、多轮验收循环和升级上报机制。
+[![GitHub stars](https://img.shields.io/github/stars/KSroido/athena?style=social)](https://github.com/KSroido/athena/stargazers)
+[![GitHub license](https://img.shields.io/github/license/KSroido/athena)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ksroido/athena)](https://goreportcard.com/report/github.com/ksroido/athena)
+[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)](https://go.dev/)
+
+📖 [架构](#架构) · 🚀 [快速开始](#快速开始) · 🔧 [配置](#配置) · 📡 [API 参考](#api-参考) · 🤝 [贡献](#贡献)
+
+</div>
+
+---
+
+> **Athena** 生成专业化智能体 — 项目经理、开发工程师、测试工程师、代码审查员、设计师 — 通过黑板架构协作，配合结构化提示词、多轮验收循环和升级机制。
+
+## ⭐ Star 历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=KSroido/athena&type=Date)](https://star-history.com/#KSroido/athena&Date)
+
+## 🌟 为什么选择 Athena？
+
+| 特性 | 说明 |
+|------|------|
+| **IT公司模型** | 智能体扮演真实角色：PM定义需求，开发编码，测试验证，审查审计 |
+| **黑板架构** | 共享记忆，结构化分类（目标、事实、标准、验证、决策） |
+| **验收循环** | PM读取输出文件，逐条对照验收标准 — 不走形式 |
+| **6层Agent Soul** | 结构化提示词：身份→原则→流程→工具→约束→自检 |
+| **多Provider LLM** | 内置回退链，429检测，自动冷却，Provider轮换 |
+| **动态HR** | 按需招聘任意角色 — HR通过LLM生成专业Soul，带项目适配性检查 |
+| **100轮升级机制** | 验收循环上限100轮；PM升级至CEO决策 |
+| **Go + SQLite** | 单二进制，零外部依赖。FTS5驱动黑板搜索 |
 
 ## 架构
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  CEO (用户)                                         │
-│    │ POST /api/chat {"message": "写一个贪吃蛇游戏"}  │
+│  CEO (用户)                                          │
+│    │ POST /api/chat {"message": "做个贪吃蛇游戏"}    │
 │    ▼                                                │
-│  AgentServer (CEO秘书)                              │
-│    │ 意图识别: new_project / update / query / HR     │
+│  AgentServer (CEO秘书)                               │
+│    │ 意图: new_project / update / query / HR         │
 │    ▼                                                │
 │  ┌──────────┐    ┌──────────┐    ┌──────────┐      │
 │  │ PM Agent │───▶│ Developer│───▶│ Blackboard│     │
 │  │          │◀───│  Agent   │    │ (SQLite)  │     │
-│  │ 验收 ←───┘    │          │    │           │     │
+│  │ verify ←─┘    │          │    │           │     │
 │  │  ↑ submit_    └──────────┘    │  goal     │     │
 │  │  │ for_review                 │  fact     │     │
-│  │  │ (SteerCh 通知)             │  criteria │     │
+│  │  │ (SteerCh通知)              │  criteria │     │
 │  │  └────────────────────────────│  verify   │     │
 │  └──────────┐                    └──────────┘      │
 │             │ hr_request                            │
 │             ▼                                       │
 │  ┌──────────┐                                       │
-│  │    HR    │ ← 角色模板，公司规模上限               │
+│  │    HR    │ ← 角色模板, 公司人数上限               │
 │  └──────────┘                                       │
 └─────────────────────────────────────────────────────┘
 ```
 
 **核心工作流：**
 
-1. CEO 发需求 → AgentServer 意图识别 → 创建项目 + 黑板
-2. HR 招聘 PM → PM 定义验收标准 → 向 Developer 分配任务
-3. Developer 编码 → 使用 `submit_for_review` → 通过 SteerCh 唤醒 PM
-4. PM 读取产出文件，逐条对照验收标准
-5. 不通过 → PM 发送整改任务 → 回到步骤 3
-6. 通过 → PM 写入 `[PASS]` 到黑板
-7. ≥100 轮 → PM 写入 `[ESCALATION]` → CEO 决策
+1. CEO发送需求 → AgentServer识别意图 → 创建项目+黑板
+2. HR招聘PM → PM定义验收标准 → 分配任务给开发
+3. 开发编码 → 使用`submit_for_review` → PM通过SteerCh被唤醒
+4. PM读取输出文件，逐条对照标准
+5. 未通过 → PM发送修正任务 → 回到步骤3
+6. 通过 → PM向黑板写入`[PASS]`
+7. ≥100轮 → PM写入`[ESCALATION]` → CEO决策
 
-## Agent Soul（6层提示词架构）
+## Agent Soul (6层提示词)
 
-每个 Agent 的系统提示词遵循结构化的6层架构：
+每个智能体的系统提示词遵循6层结构化架构：
 
 | 层级 | 内容 | 示例 |
 |------|------|------|
-| 1. 身份 | 我是谁，哪个项目 | "你是 Athena 系统中的项目经理 Agent" |
-| 2. 原则 | 核心行为准则 | "需求回溯：每轮验收必须对照CEO原始需求逐条确认" |
-| 3. 流程 | 标准操作步骤 | "1.读取黑板→2.定义验收标准→3.招聘→4.分配任务→5.验收循环" |
-| 4. 工具 | 何时使用哪个工具 | "submit_for_review: 完成开发后必须使用此工具提交验收" |
-| 5. 约束 | 什么不能做 | "禁止未经 file_read 读取文件就判定验收通过" |
-| 6. 自检 | 完成前检查清单 | "是否逐条对照了CEO原始需求？" |
+| 1. 身份 | 我是谁，哪个项目 | "你是Athena系统的PM Agent" |
+| 2. 原则 | 核心行为规则 | "需求可追溯：每轮验收必须逐条对照CEO原始需求" |
+| 3. 流程 | 逐步SOP | "1. 读黑板→2. 定义验收标准→3. 招聘→4. 分配任务→5. 验收循环" |
+| 4. 工具 | 何时用哪个 | "submit_for_review：开发完成后必须使用此工具提交验收" |
+| 5. 约束 | 不能做什么 | "不读输出文件不得标记验收通过" |
+| 6. 自检 | 完成前清单 | "是否逐条对照了CEO原始需求？" |
 
-## 环境要求
+## 快速开始
+
+### 环境要求
 
 - Go 1.25+
-- GCC（CGO / go-sqlite3 编译需要）
-- OpenAI 兼容的 LLM API（OpenAI、Azure、腾讯云 LKEAP 等）
+- GCC（用于CGO / go-sqlite3）
+- 兼容OpenAI的LLM API
 
-## 安装
+### 安装
 
 ```bash
 git clone https://github.com/KSroido/athena.git
 cd athena
-go build -o athena ./cmd/athena
+CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" go build -o athena ./cmd/athena
 ```
 
-> **注意：** go-sqlite3 需要 CGO，确保系统安装了 GCC。
-> Linux: `sudo apt install build-essential`
-> macOS: `xcode-select --install`
-
-## 配置
+### 配置
 
 创建 `config/athena.yaml`：
 
@@ -84,32 +112,36 @@ server:
   port: 8080
 
 llm:
-  base_url: "https://api.openai.com/v1"   # OpenAI 兼容端点
-  api_key: "sk-..."                        # API Key
-  model: "gpt-4o"                          # 必须支持 tool calling
+  max_retries: 3
+  retry_cooldown: 30
+  providers:
+    - base_url: "https://api.openai.com/v1"
+      api_key: "sk-..."
+      model: "gpt-4o"
+      weight: 100
+    # 备用Provider（可选）
+    - base_url: "https://api.deepseek.com/v1"
+      api_key: "sk-..."
+      model: "deepseek-chat"
+      weight: 50
 
 company:
-  max_agents: 100       # 公司人数上限
+  max_agents: 100
   max_memory_mb: 16384
 
 agents:
-  data_dir: "./data"    # 项目工作区 + 黑板 + Agent记忆
-
-logging:
-  level: "info"
-  file: "./data/logs/athena.log"
+  data_dir: "./data"
 ```
 
-也可通过环境变量配置：
+也支持环境变量：
 
 ```bash
 export ATHENA_LLM_BASE_URL="https://api.openai.com/v1"
 export ATHENA_LLM_API_KEY="sk-..."
 export ATHENA_LLM_MODEL="gpt-4o"
-export ATHENA_PORT=8080
 ```
 
-## 启动
+### 运行
 
 ```bash
 ./athena -config config/athena.yaml
@@ -122,41 +154,51 @@ export ATHENA_PORT=8080
   Athena — AI Agent 编排系统
   像IT公司一样运作
 =====================================
+[llm] initialized provider: https://api.openai.com/v1/gpt-4o (weight=100)
 Athena server starting on 0.0.0.0:8080
 Frontend: http://localhost:8080
 ```
 
-## API 参考
-
-### CEO 对话
+### 试用
 
 ```bash
-# 创建新项目（自动识别为 new_project 意图）
+# 创建项目
 curl -X POST http://localhost:8080/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "写一个纯前端的贪吃蛇web小游戏，支持方向键控制"}'
-
-# 查询项目进展
-curl -X POST http://localhost:8080/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "项目进展怎么样了"}'
-
-# 向已有项目追加新需求
-curl -X POST http://localhost:8080/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "给贪吃蛇加上排行榜功能"}'
+  -d '{"message": "做一个前端贪吃蛇游戏，方向键控制"}'
 ```
 
-### 项目管理
+## API 参考
+
+### CEO 聊天
+
+```bash
+# 创建新项目（自动识别为new_project意图）
+curl -X POST http://localhost:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "做一个前端贪吃蛇游戏"}'
+
+# 查询项目状态
+curl -X POST http://localhost:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "项目进展如何？"}'
+
+# 向现有项目发送新需求
+curl -X POST http://localhost:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "给贪吃蛇加排行榜"}'
+```
+
+### 项目
 
 ```bash
 # 列出所有项目
 curl http://localhost:8080/api/projects
 
-# 手动创建项目（绕过 AgentServer）
+# 手动创建项目
 curl -X POST http://localhost:8080/api/projects \
   -H "Content-Type: application/json" \
-  -d '{"name": "Snake Game", "original_requirement": "写一个贪吃蛇游戏", "priority": 5}'
+  -d '{"name": "贪吃蛇", "original_requirement": "做一个贪吃蛇游戏", "priority": 5}'
 
 # 获取项目详情
 curl http://localhost:8080/api/projects/{id}
@@ -165,39 +207,36 @@ curl http://localhost:8080/api/projects/{id}
 ### 黑板
 
 ```bash
-# 读取黑板条目（全部类别）
+# 读取黑板条目
 curl http://localhost:8080/api/projects/{id}/blackboard
-
-# 按类别筛选
-curl "http://localhost:8080/api/projects/{id}/blackboard?category=verification"
 
 # 写入黑板
 curl -X POST http://localhost:8080/api/projects/{id}/blackboard \
   -H "Content-Type: application/json" \
-  -d '{"category": "fact", "content": "API接口使用RESTful风格", "certainty": "certain", "author": "ceo"}'
+  -d '{"category": "fact", "content": "API使用RESTful风格", "certainty": "certain", "author": "ceo"}'
 ```
 
-**黑板类别：**
+**黑板分类：**
 
-| 类别 | 说明 | 写入者 |
+| 分类 | 说明 | 写入者 |
 |------|------|--------|
-| `goal` | CEO 原始需求 | CEO, PM |
-| `fact` | 确认的事实 | 全部 Agent |
-| `acceptance_criteria` | PM 定义的验收标准 | PM |
-| `verification` | 验收轮次结果 | Developer（提交）、PM（审核） |
-| `progress` | 工作进展 | 全部 Agent |
-| `discovery` | 新发现 | 全部 Agent |
-| `resolution` | 会议决议 | 全部 Agent |
-| `auxiliary` | 错误日志、诊断信息 | Developer, Tester |
+| `goal` | CEO原始需求 | CEO, PM |
+| `fact` | 确认事实 | 所有智能体 |
+| `acceptance_criteria` | PM定义的验收标准 | PM |
+| `verification` | 验收轮次结果 | Developer（提交）, PM（审查） |
+| `progress` | 工作进展 | 所有智能体 |
+| `discovery` | 新发现 | 所有智能体 |
+| `resolution` | 会议决议 | 所有智能体 |
+| `auxiliary` | 错误日志、诊断 | Developer, Tester |
 | `decision` | 关键决策 | PM |
 
-### Agent
+### 智能体
 
 ```bash
-# 列出运行中的 Agent
+# 列出运行中的智能体
 curl http://localhost:8080/api/agents
 
-# 列出项目下的 Agent
+# 列出项目的智能体
 curl http://localhost:8080/api/projects/{id}/agents
 ```
 
@@ -207,17 +246,15 @@ curl http://localhost:8080/api/projects/{id}/agents
 # 列出所有公司成员
 curl http://localhost:8080/api/company
 
-# 手动招聘 Agent
+# 手动招聘智能体
 curl -X POST http://localhost:8080/api/company/hire \
   -H "Content-Type: application/json" \
   -d '{"role": "developer", "project_id": "abc123", "reason": "需要开发工程师"}'
 ```
 
-**可用角色：** `pm`、`developer`、`tester`、`reviewer`、`designer`
+**可用角色：** `pm`, `developer`, `tester`, `reviewer`, `designer`
 
-## Agent 工具集
-
-每个角色拥有特定的工具集：
+## 智能体工具
 
 | 工具 | PM | Developer | Tester | Reviewer | Designer |
 |------|:--:|:---------:|:------:|:--------:|:--------:|
@@ -235,8 +272,6 @@ curl -X POST http://localhost:8080/api/company/hire \
 
 ## 验收循环
 
-PM 验收流程的状态机：
-
 ```
                   ┌─────────────────────┐
                   │  PM 定义             │
@@ -244,13 +279,13 @@ PM 验收流程的状态机：
                   └──────────┬──────────┘
                              │
                   ┌──────────▼──────────┐
-                  │  PM 分配任务        │
-                  │  给 Developer       │
+                  │  PM 分配任务         │
+                  │  给 Developer        │
                   └──────────┬──────────┘
                              │
                   ┌──────────▼──────────┐
-                  │  Developer 编码     │
-                  │  + submit_for_review│
+                  │  Developer 编码      │
+                  │  + submit_for_review │
                   └──────────┬──────────┘
                              │
                   ┌──────────▼──────────┐
@@ -260,17 +295,18 @@ PM 验收流程的状态机：
               │   └──────┬─────────────┘
               │          │
               │    ┌─────▼─────┐
-              │    │  通过?    │
+              │    │  通过？    │
               │    └──┬────┬───┘
               │       │    │
               │    否  │    │ 是
               │  ┌─────▼┐  ┌▼──────────┐
-              │  │整改 + │  │[PASS]     │
-              │  │重提   │  │→ 交付     │
-              │  └──┬────┘  └───────────┘
+              │  │修正+  │  │[PASS]     │
+              │  │重新   │  │→ 交付     │
+              │  │提交   │  └───────────┘
+              │  └──┬────┘
               │     │
               │  ┌──▼────────────┐
-              └──│轮次 < 100?    │
+              └──│轮次 < 100？    │
                  └──┬────────┬───┘
                     │        │
                  是 │     否 │
@@ -282,73 +318,85 @@ PM 验收流程的状态机：
                     └──▶ 回到 PM 验收
 ```
 
-- 每轮验收记录在黑板中（`category: verification`）
-- 轮次 ≥80：PM steer 消息中注入预警
-- 轮次 ≥100：PM 必须写入 `[ESCALATION]` 并停止验收循环
-- CEO 随后可决定：放宽标准、更换 Developer、或取消项目
+## LLM 兼容性
+
+Athena使用Eino的兼容OpenAI客户端，支持**多Provider回退**。任何支持OpenAI Chat Completions API + tool calling的Provider均可：
+
+| Provider | base_url | 备注 |
+|----------|----------|------|
+| OpenAI | `https://api.openai.com/v1` | gpt-4o, gpt-4o-mini |
+| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{model}` | |
+| 字节火山 Ark | `https://ark.cn-beijing.volces.com/api/v3` | Doubao, GLM |
+| 腾讯云 LKEAP | `https://api.lkeap.cloud.tencent.com/plan/v3` | glm-5.1 |
+| DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat |
+| 本地 (Ollama) | `http://localhost:11434/v1` | 需支持tool calling |
+| 本地 (vLLM) | `http://localhost:8000/v1` | |
+
+**要求：** 模型必须支持OpenAI风格的function/tool calling。
+
+**回退特性：**
+- 429/限流检测，per-provider冷却
+- 失败时自动Provider轮换
+- 可配置重试次数和冷却时长
+- Retry-After头解析
 
 ## 项目结构
 
 ```
 athena/
 ├── cmd/athena/main.go           # 入口
-├── config/athena.yaml           # 配置文件
+├── config/athena.yaml           # 配置
 ├── internal/
-│   ├── api/handlers.go          # HTTP 路由处理 (Gin)
+│   ├── api/handlers.go          # HTTP处理器 (Gin)
 │   ├── blackboard/
 │   │   ├── board.go             # 黑板 SQLite + FTS5
-│   │   └── access_control.go    # 角色-层级访问控制矩阵
-│   ├── config/config.go         # 配置加载 + 校验
+│   │   └── access_control.go    # 角色级访问矩阵
+│   ├── config/config.go         # 配置加载+校验
 │   ├── core/
-│   │   ├── agent_loop.go        # Agent ReAct 循环 + 工具创建
-│   │   ├── agent_loop_v2.go     # 进程内运行 + 验收通知处理
-│   │   ├── agent_manager.go     # goroutine Agent 生命周期管理
-│   │   ├── agent_server.go      # CEO 秘书（意图路由）
-│   │   ├── llm_client.go        # Eino OpenAI 兼容客户端
+│   │   ├── agent_loop.go        # Agent ReAct循环+工具创建
+│   │   ├── agent_loop_v2.go     # RunInProcess + 验收引导
+│   │   ├── agent_manager.go     # 基于Goroutine的Agent生命周期
+│   │   ├── agent_server.go      # CEO秘书（意图路由）
+│   │   ├── llm_client.go        # 多Provider LLM + 429回退
 │   │   └── prompts.go           # 6层结构化提示词
 │   ├── db/
-│   │   ├── database.go          # 主 SQLite 数据库
+│   │   ├── database.go          # 主SQLite DB
 │   │   └── models.go            # 数据模型
-│   ├── hr/hr.go                 # 招聘 + 角色模板
-│   ├── server/server.go         # Gin HTTP 服务器
+│   ├── hr/hr.go                 # 招聘+角色模板+适配性检查
+│   ├── server/server.go         # Gin HTTP服务器
 │   └── tools/
 │       ├── eino_tools.go        # 黑板读写工具
 │       └── tools_v2.go          # assign_task, hr_request, file, term, submit_for_review
-└── data/                        # 运行时数据（gitignore）
-    ├── athena.sqlite            # 主数据库
-    ├── board/                   # 按项目隔离的黑板数据库
-    ├── workspace/{project_id}/  # 项目文件产出
-    └── agents/{agent_id}/       # Agent 个人记忆 (memory.md)
+└── data/                        # 运行时数据（gitignored）
+    ├── athena.sqlite            # 主DB
+    ├── board/                   # 每项目黑板DB
+    ├── workspace/{project_id}/  # 项目文件输出
+    └── agents/{agent_id}/       # Agent记忆 (memory.md)
 ```
 
-## LLM 兼容性
+## 贡献
 
-Athena 使用 Eino 的 OpenAI 兼容客户端。任何支持 OpenAI Chat Completions API 且具备 **tool calling** 能力的提供商均可使用：
+欢迎贡献！请随时提交Pull Request。
 
-| 提供商 | base_url | 备注 |
-|--------|----------|------|
-| OpenAI | `https://api.openai.com/v1` | gpt-4o, gpt-4o-mini |
-| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{model}` | |
-| 腾讯云 LKEAP | `https://api.lkeap.cloud.tencent.com/plan/v3` | glm-5.1 |
-| DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat |
-| 本地 (Ollama) | `http://localhost:11434/v1` | 需支持 tool calling |
-| 本地 (vLLM) | `http://localhost:8000/v1` | |
-
-**硬性要求：** 模型必须支持 OpenAI 风格的 function/tool calling。不支持 tool calling 的模型无法工作。
+1. Fork本仓库
+2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'Add some amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 发起Pull Request
 
 ## 开发
 
 ```bash
-# 编译（需要 CGO）
+# 构建
 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" go build -o athena ./cmd/athena
 
 # 测试
 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" go test ./...
 
-# 热重载（需要 air）
+# 热重载运行（需要air）
 air
 ```
 
-## License
+## 许可证
 
-MIT
+[MIT](LICENSE)
