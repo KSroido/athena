@@ -30,16 +30,19 @@ type LLMCaller interface {
 
 // HR manages agent hiring, role generation, and role library.
 //
-// Role resolution order:
-//  1. User custom roles: ~/.athena/roles/{role}.json  (highest priority, user can edit)
-//  2. Built-in seed templates: SeedTemplates map      (shipped with Athena)
-//  3. LLM dynamic generation: HR generates soul on-the-fly when neither 1 nor 2 matches
+// Role resolution order (per project):
+//  1. Project-level roles: {dataDir}/roles/{projectID}/{role}.json — confirmed fit, direct use
+//  2. Global roles: ~/.athena/roles/{role}.json + fitness check
+//     - Fit → copy to project-level for future use
+//     - Not fit → LLM regenerates with project context, save to project-level
+//  3. Built-in seed templates: SeedTemplates map (generic, no fitness check needed)
+//  4. LLM dynamic generation: HR generates soul on-the-fly, save to project-level
 type HR struct {
-	mainDB    *db.DB
-	starter   AgentStarter
-	llm       LLMCaller
-	dataDir   string
-	rolesDir  string // ~/.athena/roles/ — user-editable role library
+	mainDB   *db.DB
+	starter  AgentStarter
+	llm      LLMCaller
+	dataDir  string
+	rolesDir string // ~/.athena/roles/ — global role library (reference + reuse)
 }
 
 // New creates a new HR instance
@@ -54,18 +57,18 @@ func New(mainDB *db.DB, starter AgentStarter, dataDir string) *HR {
 		rolesDir: rolesDir,
 	}
 
-	// Ensure roles directory exists and seed it
+	// Ensure global roles directory exists and seed it
 	h.initRolesDir()
 
 	return h
 }
 
-// SetLLM injects the LLM client for dynamic role generation
+// SetLLM injects the LLM client for dynamic role generation and fitness checks
 func (h *HR) SetLLM(llm LLMCaller) {
 	h.llm = llm
 }
 
-// RolesDir returns the user roles directory path
+// RolesDir returns the global roles directory path
 func (h *HR) RolesDir() string {
 	return h.rolesDir
 }
@@ -76,16 +79,17 @@ func (h *HR) RolesDir() string {
 
 // RoleTemplate defines a role template for creating agents.
 type RoleTemplate struct {
-	Role        string   `json:"role"`        // e.g. "dev.backend.finance"
-	Name        string   `json:"name"`        // e.g. "金融/量化开发工程师"
-	Category    string   `json:"category"`    // e.g. "dev" — determines tool set
-	Description string   `json:"description"` // Human-readable description
-	Tools       []string `json:"tools"`       // tool names (auto-filled from category if empty)
-	Soul        string   `json:"soul"`        // Full 6-layer soul prompt (optional for seed roles, required for custom)
+	Role        string   `json:"role"`         // e.g. "dev.backend.finance"
+	Name        string   `json:"name"`         // e.g. "金融/量化开发工程师"
+	Category    string   `json:"category"`     // e.g. "dev" — determines tool set
+	Description string   `json:"description"`  // Human-readable description
+	Domain      string   `json:"domain"`       // Generation context: what project/domain this soul was created for
+	Tools       []string `json:"tools"`        // tool names (auto-filled from category if empty)
+	Soul        string   `json:"soul"`         // Full 6-layer soul prompt
 }
 
 // SeedTemplates are the built-in seed templates shipped with Athena.
-// These are the minimum viable role set — HR can generate beyond these via LLM.
+// These are generic and project-agnostic — no fitness check needed.
 var SeedTemplates = map[string]RoleTemplate{
 	"pm": {
 		Role: "pm", Name: "项目经理", Category: "pm",
@@ -127,10 +131,25 @@ var CategoryToolMap = map[string][]string{
 }
 
 // ---------------------------------------------------------------------------
-// Roles Directory (~/.athena/roles/)
+// Roles Directories
 // ---------------------------------------------------------------------------
 
-// initRolesDir ensures the roles directory exists and writes seed templates as JSON files
+// globalRolePath returns the path for a role in the global library
+func (h *HR) globalRolePath(role string) string {
+	return filepath.Join(h.rolesDir, role+".json")
+}
+
+// projectRolePath returns the path for a role in the project-level library
+func (h *HR) projectRolePath(projectID, role string) string {
+	return filepath.Join(h.dataDir, "roles", projectID, role+".json")
+}
+
+// projectRolesDir returns the project-level roles directory
+func (h *HR) projectRolesDir(projectID string) string {
+	return filepath.Join(h.dataDir, "roles", projectID)
+}
+
+// initRolesDir ensures the global roles directory exists and writes seed templates
 func (h *HR) initRolesDir() {
 	if err := os.MkdirAll(h.rolesDir, 0755); err != nil {
 		log.Printf("[hr] warning: failed to create roles dir %s: %v", h.rolesDir, err)
@@ -139,7 +158,7 @@ func (h *HR) initRolesDir() {
 
 	// Write seed templates as JSON files (only if file doesn't exist — user edits are preserved)
 	for _, tmpl := range SeedTemplates {
-		path := h.roleFilePath(tmpl.Role)
+		path := h.globalRolePath(tmpl.Role)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			tmplCopy := tmpl
 			tmplCopy.Tools = GetToolsForCategory(tmpl.Category)
@@ -151,52 +170,27 @@ func (h *HR) initRolesDir() {
 	readmePath := filepath.Join(h.rolesDir, "README.md")
 	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
 		readmeContent := "# Athena Role Library\n\n" +
-			"This directory contains role templates for Athena agents.\n\n" +
-			"## Structure\n\n" +
-			"Each file `{role-id}.json` defines one role. Role IDs use dot-separated hierarchy:\n" +
-			"- `pm` — Project Manager\n" +
-			"- `dev.frontend` — Frontend Developer\n" +
-			"- `dev.backend.finance` — Finance/Quant Developer (example custom role)\n\n" +
-			"## Adding Custom Roles\n\n" +
-			"1. Create a new JSON file, e.g. `dev.backend.finance.json`:\n\n" +
-			"```json\n" +
-			"{\n" +
-			"  \"role\": \"dev.backend.finance\",\n" +
-			"  \"name\": \"金融/量化开发工程师\",\n" +
-			"  \"category\": \"dev\",\n" +
-			"  \"description\": \"专注金融/量化系统开发：交易引擎、风控模型、行情处理、策略回测\",\n" +
-			"  \"tools\": [],\n" +
-			"  \"soul\": \"\"\n" +
-			"}\n" +
-			"```\n\n" +
-			"2. If `tools` is empty, tools are auto-assigned from the category.\n" +
-			"3. If `soul` is empty, HR generates it via LLM when hiring. You can pre-fill it to avoid LLM calls.\n" +
-			"4. Soul must follow the 6-layer structure: 身份 → 核心原则 → 工作流程 → 工具使用规范 → 约束 → 自检清单\n\n" +
-			"## Modifying Existing Roles\n\n" +
-			"Edit the JSON file directly. Changes take effect on next hire (running agents are not affected).\n\n" +
-			"## Role Resolution Order\n\n" +
-			"1. Custom roles in this directory (highest priority)\n" +
-			"2. Built-in seed templates\n" +
-			"3. LLM dynamic generation (when neither matches)\n\n" +
-			"## Category → Tool Mapping\n\n" +
-			"| Category    | Tools                                                          |\n" +
-			"|-------------|----------------------------------------------------------------|\n" +
-			"| pm          | blackboard_read/write, assign_task, hr_request, file_read/write, memory_read/write |\n" +
-			"| dev         | blackboard_read/write, term, file_read/write, submit_for_review, memory_read/write |\n" +
-			"| tester      | blackboard_read/write, term, file_read/write, memory_read/write |\n" +
-			"| reviewer    | blackboard_read/write, file_read, memory_read/write            |\n" +
-			"| designer    | blackboard_read/write, file_read/write, memory_read/write      |\n"
+			"This directory contains global role templates for Athena agents.\n" +
+			"These serve as a reference library — HR checks fitness before reusing them for a project.\n\n" +
+			"## Role Resolution\n\n" +
+			"1. Project-level: {dataDir}/roles/{projectID}/{role}.json (confirmed fit)\n" +
+			"2. Global: this directory + fitness check (LLM evaluates if soul matches project)\n" +
+			"3. Seed templates (generic, no fitness check needed)\n" +
+			"4. LLM dynamic generation (when no match found)\n\n" +
+			"## Adding Global Roles\n\n" +
+			"Global roles are reference templates. HR will check if a global role's soul\n" +
+			"fits the current project before reusing it. If not, a project-specific variant\n" +
+			"is generated and saved to the project-level directory.\n"
 		_ = os.WriteFile(readmePath, []byte(readmeContent), 0644)
 	}
 }
 
-// roleFilePath returns the JSON file path for a role
-func (h *HR) roleFilePath(role string) string {
-	return filepath.Join(h.rolesDir, role+".json")
-}
-
 // writeRoleFile writes a RoleTemplate to a JSON file
 func (h *HR) writeRoleFile(path string, tmpl *RoleTemplate) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		log.Printf("[hr] warning: failed to create dir for role file %s: %v", path, err)
+		return
+	}
 	data, err := json.MarshalIndent(tmpl, "", "  ")
 	if err != nil {
 		log.Printf("[hr] warning: failed to marshal role template: %v", err)
@@ -218,8 +212,8 @@ func (h *HR) readRoleFile(path string) (*RoleTemplate, error) {
 	return &tmpl, nil
 }
 
-// LoadAllCustomRoles loads all role templates from ~/.athena/roles/
-func (h *HR) LoadAllCustomRoles() map[string]RoleTemplate {
+// LoadAllGlobalRoles loads all role templates from ~/.athena/roles/
+func (h *HR) LoadAllGlobalRoles() map[string]RoleTemplate {
 	roles := make(map[string]RoleTemplate)
 	entries, err := os.ReadDir(h.rolesDir)
 	if err != nil {
@@ -235,7 +229,6 @@ func (h *HR) LoadAllCustomRoles() map[string]RoleTemplate {
 			log.Printf("[hr] warning: failed to load role file %s: %v", path, err)
 			continue
 		}
-		// Auto-fill tools from category if empty
 		if len(tmpl.Tools) == 0 {
 			tmpl.Tools = GetToolsForCategory(tmpl.Category)
 		}
@@ -244,8 +237,34 @@ func (h *HR) LoadAllCustomRoles() map[string]RoleTemplate {
 	return roles
 }
 
-// SaveCustomRole writes a new or updated role template to ~/.athena/roles/
-func (h *HR) SaveCustomRole(tmpl *RoleTemplate) error {
+// LoadProjectRoles loads all role templates from project-level directory
+func (h *HR) LoadProjectRoles(projectID string) map[string]RoleTemplate {
+	roles := make(map[string]RoleTemplate)
+	dir := h.projectRolesDir(projectID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return roles
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		tmpl, err := h.readRoleFile(path)
+		if err != nil {
+			log.Printf("[hr] warning: failed to load project role file %s: %v", path, err)
+			continue
+		}
+		if len(tmpl.Tools) == 0 {
+			tmpl.Tools = GetToolsForCategory(tmpl.Category)
+		}
+		roles[tmpl.Role] = *tmpl
+	}
+	return roles
+}
+
+// SaveProjectRole writes a role template to the project-level directory
+func (h *HR) SaveProjectRole(projectID string, tmpl *RoleTemplate) error {
 	if tmpl.Role == "" {
 		return fmt.Errorf("role ID cannot be empty")
 	}
@@ -255,46 +274,224 @@ func (h *HR) SaveCustomRole(tmpl *RoleTemplate) error {
 	if len(tmpl.Tools) == 0 {
 		tmpl.Tools = GetToolsForCategory(tmpl.Category)
 	}
-	path := h.roleFilePath(tmpl.Role)
+	path := h.projectRolePath(projectID, tmpl.Role)
 	h.writeRoleFile(path, tmpl)
-	log.Printf("[hr] saved custom role %s to %s", tmpl.Role, path)
+	log.Printf("[hr] saved project role %s for project %s to %s", tmpl.Role, projectID, path)
+	return nil
+}
+
+// SaveGlobalRole writes a role template to the global library
+func (h *HR) SaveGlobalRole(tmpl *RoleTemplate) error {
+	if tmpl.Role == "" {
+		return fmt.Errorf("role ID cannot be empty")
+	}
+	if tmpl.Category == "" {
+		tmpl.Category = InferCategory(tmpl.Role)
+	}
+	if len(tmpl.Tools) == 0 {
+		tmpl.Tools = GetToolsForCategory(tmpl.Category)
+	}
+	path := h.globalRolePath(tmpl.Role)
+	h.writeRoleFile(path, tmpl)
+	log.Printf("[hr] saved global role %s to %s", tmpl.Role, path)
 	return nil
 }
 
 // ---------------------------------------------------------------------------
-// Role Resolution
+// Role Resolution (with fitness check)
 // ---------------------------------------------------------------------------
 
-// ResolveRole looks up a role template in this order:
-// 1. Custom roles in ~/.athena/roles/
-// 2. Seed templates
-// Returns (template, found)
-func (h *HR) ResolveRole(role string) (RoleTemplate, bool) {
-	// 1. Custom roles (highest priority)
-	customRoles := h.LoadAllCustomRoles()
-	if tmpl, ok := customRoles[role]; ok {
-		return tmpl, true
+// ResolvedRole is the result of role resolution
+type ResolvedRole struct {
+	Template      RoleTemplate
+	Source        string // "project", "global_fit", "global_unfit_regen", "seed", "llm_generated", "fallback"
+	FitnessPassed bool   // Whether fitness check passed (true for project/seed/llm, checked for global)
+}
+
+// ResolveRoleForProject looks up a role template with project-aware fitness checking.
+//
+// Resolution order:
+//  1. Project-level roles — already confirmed fit, direct use
+//  2. Global roles + fitness check — LLM evaluates if soul matches project context
+//     - Fit → copy to project-level, use directly
+//     - Not fit → LLM regenerates with project context, save to project-level
+//  3. Seed templates — generic, no fitness check needed
+//  4. Not found → LLM generates from scratch
+func (h *HR) ResolveRoleForProject(role, projectID, reason string) (*ResolvedRole, error) {
+	category := InferCategory(role)
+
+	// 1. Project-level roles (already confirmed fit)
+	if projRoles := h.LoadProjectRoles(projectID); projRoles != nil {
+		if tmpl, ok := projRoles[role]; ok {
+			return &ResolvedRole{
+				Template:      tmpl,
+				Source:        "project",
+				FitnessPassed: true,
+			}, nil
+		}
 	}
 
-	// 2. Seed templates
+	// 2. Global roles + fitness check
+	if globalRoles := h.LoadAllGlobalRoles(); globalRoles != nil {
+		if tmpl, ok := globalRoles[role]; ok {
+			// Seed roles in global dir don't need fitness check (they're generic)
+			if _, isSeed := SeedTemplates[role]; isSeed {
+				return &ResolvedRole{
+					Template:      tmpl,
+					Source:        "seed",
+					FitnessPassed: true,
+				}, nil
+			}
+
+			// Custom global role — check fitness
+			fit, err := h.checkRoleFitness(tmpl, reason)
+			if err != nil {
+				log.Printf("[hr] fitness check failed (LLM unavailable), assuming not fit: %v", err)
+				fit = false
+			}
+
+			if fit {
+				// Fit → copy to project-level for future use
+				_ = h.SaveProjectRole(projectID, &tmpl)
+				return &ResolvedRole{
+					Template:      tmpl,
+					Source:        "global_fit",
+					FitnessPassed: true,
+				}, nil
+			}
+
+			// Not fit → need to regenerate with project context
+			return &ResolvedRole{
+				Template:      tmpl,
+				Source:        "global_unfit_regen",
+				FitnessPassed: false,
+			}, nil
+		}
+	}
+
+	// 3. Seed templates (not in global dir yet, but defined in code)
 	if tmpl, ok := SeedTemplates[role]; ok {
 		result := tmpl
 		result.Tools = GetToolsForCategory(tmpl.Category)
-		return result, true
+		return &ResolvedRole{
+			Template:      result,
+			Source:        "seed",
+			FitnessPassed: true,
+		}, nil
 	}
 
-	return RoleTemplate{}, false
+	// 4. Not found
+	return &ResolvedRole{
+		Template: RoleTemplate{
+			Role:     role,
+			Category: category,
+			Tools:    GetToolsForCategory(category),
+		},
+		Source:        "not_found",
+		FitnessPassed: false,
+	}, nil
 }
 
-// RoleCatalog returns all available roles (custom + seed) as a formatted string
-func (h *HR) RoleCatalog() string {
-	// Merge custom + seed
+// ---------------------------------------------------------------------------
+// Fitness Check
+// ---------------------------------------------------------------------------
+
+// checkRoleFitness uses LLM to evaluate whether a global role's soul fits the
+// current project's needs. Returns true if the soul's domain expertise matches
+// the project context described in `reason`.
+func (h *HR) checkRoleFitness(tmpl RoleTemplate, projectReason string) (bool, error) {
+	// No soul to check — always unfit
+	if tmpl.Soul == "" {
+		return false, nil
+	}
+
+	// No project context provided — assume fit (can't evaluate without context)
+	if projectReason == "" {
+		return true, nil
+	}
+
+	// No LLM available — assume fit (can't evaluate without LLM)
+	if h.llm == nil {
+		log.Printf("[hr] no LLM available for fitness check, assuming global role %s is fit", tmpl.Role)
+		return true, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	system := `你是 Athena 系统的角色适配性评估器。你需要判断一个全局角色库中的角色定义（soul）是否适配当前项目的需求。
+
+判断标准：
+- soul 中的专业领域、工作流程、约束是否与项目需求匹配
+- soul 是否针对某个特定行业/场景定制，而项目需求是另一个行业/场景
+- 通用角色（如通用后端开发、通用前端开发）默认适配
+
+只输出 JSON：{"fit": true} 或 {"fit": false, "reason": "不适配原因"}`
+
+	// Truncate soul to avoid excessive token usage
+	soulPreview := tmpl.Soul
+	if len(soulPreview) > 2000 {
+		soulPreview = soulPreview[:2000] + "\n...（已截断）"
+	}
+
+	user := fmt.Sprintf(`角色ID: %s
+角色名称: %s
+角色Domain: %s
+角色描述: %s
+
+Soul 内容摘要:
+%s
+
+当前项目招聘原因: %s
+
+请判断此角色的 soul 是否适配当前项目需求。`, tmpl.Role, tmpl.Name, tmpl.Domain, tmpl.Description, soulPreview, projectReason)
+
+	resp, err := h.llm.ChatWithSystem(ctx, system, user)
+	if err != nil {
+		return false, fmt.Errorf("LLM fitness check: %w", err)
+	}
+
+	content := strings.TrimSpace(resp.Content)
+	// Extract JSON from response
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start >= 0 && end > start {
+		content = content[start : end+1]
+	}
+
+	// Simple parsing — just look for "fit": true/false
+	if strings.Contains(content, `"fit": true`) || strings.Contains(content, `"fit":true`) {
+		log.Printf("[hr] fitness check PASSED for role %s (project reason: %s)", tmpl.Role, truncateStr(projectReason, 50))
+		return true, nil
+	}
+
+	log.Printf("[hr] fitness check FAILED for role %s (project reason: %s)", tmpl.Role, truncateStr(projectReason, 50))
+	return false, nil
+}
+
+// ---------------------------------------------------------------------------
+// Role Catalog
+// ---------------------------------------------------------------------------
+
+// RoleCatalog returns all available roles (project + global + seed) as a formatted string
+func (h *HR) RoleCatalog(projectID string) string {
 	allRoles := make(map[string]RoleTemplate)
+
+	// Seed templates
 	for k, v := range SeedTemplates {
 		allRoles[k] = v
 	}
-	for k, v := range h.LoadAllCustomRoles() {
-		allRoles[k] = v // custom overrides seed
+
+	// Global roles (override seeds)
+	for k, v := range h.LoadAllGlobalRoles() {
+		allRoles[k] = v
+	}
+
+	// Project roles (override global)
+	if projectID != "" {
+		for k, v := range h.LoadProjectRoles(projectID) {
+			allRoles[k] = v
+		}
 	}
 
 	// Group by category
@@ -324,6 +521,7 @@ func (h *HR) RoleCatalog() string {
 	}
 
 	sb.WriteString("**注意：以上仅为已注册角色。你可以指定任意角色ID（如 `dev.backend.finance`），HR会自动生成对应的专业soul。**\n")
+	sb.WriteString("**HR会检查全局角色库中的角色是否适配当前项目，不适配时会自动重新生成。**\n")
 
 	return sb.String()
 }
@@ -380,11 +578,10 @@ type HireRequest struct {
 	Role       string `json:"role"`        // Role ID (e.g. "dev.backend.finance")
 	Speciality string `json:"speciality"`  // Extra speciality hint for LLM soul generation
 	ProjectID  string `json:"project_id"`
-	Reason     string `json:"reason"`      // Why this role is needed (used in soul generation)
+	Reason     string `json:"reason"`      // Why this role is needed (used in soul generation + fitness check)
 }
 
-// Hire creates and starts a new agent.
-// Resolution: custom role file → seed template → LLM dynamic generation
+// Hire creates and starts a new agent with project-aware role resolution.
 func (h *HR) Hire(req *HireRequest) (*db.Agent, error) {
 	// 1. Check company size limit
 	maxAgents := 100
@@ -394,50 +591,60 @@ func (h *HR) Hire(req *HireRequest) (*db.Agent, error) {
 		return nil, fmt.Errorf("公司人数已达上限 (%d/%d)，请联系CEO扩容", count, maxAgents)
 	}
 
-	// 2. Resolve role template
-	tmpl, found := h.ResolveRole(req.Role)
+	// 2. Resolve role with fitness check
+	resolved, err := h.ResolveRoleForProject(req.Role, req.ProjectID, req.Reason)
+	if err != nil {
+		return nil, fmt.Errorf("resolve role: %w", err)
+	}
+
+	tmpl := resolved.Template
 	category := tmpl.Category
 	if category == "" {
 		category = InferCategory(req.Role)
 	}
 
-	// 3. Determine if we need a custom soul
-	needsCustomSoul := false
+	// 3. Determine soul content
 	var soulContent string
+	needsCustomSoul := false
 
-	if found && tmpl.Soul != "" {
-		// Role has a pre-written soul (from custom file or LLM-generated previously)
+	switch resolved.Source {
+	case "project", "global_fit", "seed":
+		// Role confirmed fit — use existing soul (or built-in prompt for seeds)
 		soulContent = tmpl.Soul
-	} else if found && tmpl.Soul == "" {
-		// Found in templates but no soul — seed role uses built-in prompts.go
-		// OR custom role without soul — generate via LLM
-		if _, isSeed := SeedTemplates[req.Role]; !isSeed {
-			needsCustomSoul = true
-		}
-	} else {
-		// Not found at all — LLM must generate everything
+
+	case "global_unfit_regen":
+		// Global role doesn't fit this project → regenerate with project context
+		needsCustomSoul = true
+		log.Printf("[hr] global role %s not fit for project %s, regenerating soul", req.Role, req.ProjectID)
+
+	case "not_found":
+		// No matching role anywhere → generate from scratch
 		needsCustomSoul = true
 	}
 
 	// 4. Generate custom soul if needed
 	if needsCustomSoul {
-		var err error
 		soulContent, err = h.generateRoleSoul(req.Role, req.Speciality, category, req.Reason)
 		if err != nil {
 			log.Printf("[hr] LLM soul generation failed, using fallback: %v", err)
 			soulContent = h.fallbackSoul(req.Role, req.Speciality, category)
 		}
 
-		// Save the generated role to ~/.athena/roles/ for future reuse
+		// Save to project-level directory (project-specific)
 		saveTmpl := &RoleTemplate{
 			Role:        req.Role,
 			Name:        extractRoleName(soulContent, req.Role),
 			Category:    category,
 			Description: req.Reason,
+			Domain:      req.Reason, // Record the project context this soul was generated for
 			Tools:       GetToolsForCategory(category),
 			Soul:        soulContent,
 		}
-		_ = h.SaveCustomRole(saveTmpl)
+		_ = h.SaveProjectRole(req.ProjectID, saveTmpl)
+
+		// Also update global library (as reference for other projects)
+		globalTmpl := *saveTmpl
+		_ = h.SaveGlobalRole(&globalTmpl)
 
 		// Update tmpl for DB record
 		tmpl = *saveTmpl
@@ -470,7 +677,7 @@ func (h *HR) Hire(req *HireRequest) (*db.Agent, error) {
 		CreatedAt: time.Now(),
 	}
 
-	_, err := h.mainDB.DB().Exec(`
+	_, err = h.mainDB.DB().Exec(`
 		INSERT INTO agents (id, name, role, status, tools, model, created_by, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, agent.ID, agent.Name, agent.Role, agent.Status, agent.Tools, agent.Model, agent.CreatedBy, agent.CreatedAt)
@@ -510,8 +717,8 @@ func (h *HR) Hire(req *HireRequest) (*db.Agent, error) {
 		log.Printf("[hr] failed to start agent %s: %v", agent.ID, err)
 	}
 
-	log.Printf("[hr] hired %s (%s, role=%s, custom_soul=%v) for project %s",
-		tmpl.Name, agent.ID, tmpl.Role, needsCustomSoul, req.ProjectID)
+	log.Printf("[hr] hired %s (%s, role=%s, source=%s) for project %s",
+		tmpl.Name, agent.ID, tmpl.Role, resolved.Source, req.ProjectID)
 	return agent, nil
 }
 
@@ -528,47 +735,20 @@ func (h *HR) generateRoleSoul(role, speciality, category, reason string) (string
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	system := `你是 Athena 系统的 HR 角色设计师。你的任务是为一个新 Agent 生成完整的角色定义（soul）。
+	system := "你是 Athena 系统的 HR 角色设计师。你的任务是为一个新 Agent 生成完整的角色定义（soul）。\n\n" +
+		"soul 必须严格遵循以下6层结构，每层都不可省略：\n\n" +
+		"# 身份\n- 明确声明角色名称、专业领域、所属项目\n\n" +
+		"# 核心原则\n- 5条以内，是该角色的行为底线和决策准则\n- 必须体现该角色的专业特性（区别于通用角色）\n\n" +
+		"# 工作流程\n- 分阶段的步骤，每步包含具体操作\n- 必须包含与其他角色的协作点（何时读黑板、何时提交验收等）\n\n" +
+		"# 工具使用规范\n- 列出该角色可用工具及使用场景\n- 开发类角色必须包含 submit_for_review\n\n" +
+		"# 约束\n- 角色不可逾越的边界\n- 至少包含：禁止编造事实\n\n" +
+		"# 自检清单\n- 完成任务前的逐项确认\n- 必须与原则和工作流程对应\n\n" +
+		"要求：\n1. 专业性：原则和工作流程必须体现该角色的专业深度，不是泛泛而谈\n" +
+		"2. 可操作性：每个步骤必须具体到可执行，不用模糊表述\n" +
+		"3. 协作性：明确何时与谁协作，通过什么工具\n" +
+		"4. 只输出 soul 内容本身，不要输出任何解释或元信息"
 
-soul 必须严格遵循以下6层结构，每层都不可省略：
-
-# 身份
-- 明确声明角色名称、专业领域、所属项目
-
-# 核心原则
-- 5条以内，是该角色的行为底线和决策准则
-- 必须体现该角色的专业特性（区别于通用角色）
-
-# 工作流程
-- 分阶段的步骤，每步包含具体操作
-- 必须包含与其他角色的协作点（何时读黑板、何时提交验收等）
-
-# 工具使用规范
-- 列出该角色可用工具及使用场景
-- 开发类角色必须包含 submit_for_review
-
-# 约束
-- 角色不可逾越的边界
-- 至少包含：禁止编造事实
-
-# 自检清单
-- 完成任务前的逐项确认
-- 必须与原则和工作流程对应
-
-要求：
-1. 专业性：原则和工作流程必须体现该角色的专业深度，不是泛泛而谈
-2. 可操作性：每个步骤必须具体到可执行，不用模糊表述
-3. 协作性：明确何时与谁协作，通过什么工具
-4. 只输出 soul 内容本身，不要输出任何解释或元信息`
-
-	user := fmt.Sprintf(`请为以下角色生成 soul：
-
-- 角色ID: %s
-- 专业方向: %s
-- 角色大类: %s
-- 招聘原因: %s
-
-请生成完整的6层 soul。`, role, speciality, categoryDisplayName(category), reason)
+	user := fmt.Sprintf("请为以下角色生成 soul：\n\n- 角色ID: %s\n- 专业方向: %s\n- 角色大类: %s\n- 项目需求: %s\n\n请生成完整的6层 soul。", role, speciality, categoryDisplayName(category), reason)
 
 	resp, err := h.llm.ChatWithSystem(ctx, system, user)
 	if err != nil {
@@ -629,7 +809,7 @@ func (h *HR) fallbackSoul(role, speciality, category string) string {
 	return sb.String()
 }
 
-// extractRoleName tries to extract the role name from soul content (first # 身份 line)
+// extractRoleName tries to extract the role name from soul content (first **...** line)
 func extractRoleName(soul, fallback string) string {
 	for _, line := range strings.Split(soul, "\n") {
 		line = strings.TrimSpace(line)
@@ -647,14 +827,19 @@ func extractRoleName(soul, fallback string) string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// AvailableRolesList returns all role IDs (custom + seed) as a sorted slice
-func (h *HR) AvailableRolesList() []string {
+// AvailableRolesList returns all role IDs (project + global + seed) as a sorted slice
+func (h *HR) AvailableRolesList(projectID string) []string {
 	allRoles := make(map[string]bool)
 	for k := range SeedTemplates {
 		allRoles[k] = true
 	}
-	for k := range h.LoadAllCustomRoles() {
+	for k := range h.LoadAllGlobalRoles() {
 		allRoles[k] = true
+	}
+	if projectID != "" {
+		for k := range h.LoadProjectRoles(projectID) {
+			allRoles[k] = true
+		}
 	}
 	roles := make([]string, 0, len(allRoles))
 	for r := range allRoles {
@@ -705,4 +890,12 @@ func toolsToJSON(tools []string) string {
 	}
 	result += "]"
 	return result
+}
+
+// truncateStr truncates a string
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

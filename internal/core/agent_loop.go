@@ -234,7 +234,7 @@ func (al *AgentLoop) buildSystemPrompt() string {
 	// Append Layer 8: Available roles catalog (for PM)
 	if al.cfg.Role == "pm" && al.cfg.HR != nil {
 		prompt += "\n# 可招聘角色\n\n"
-		prompt += al.cfg.HR.RoleCatalog()
+		prompt += al.cfg.HR.RoleCatalog(al.cfg.ProjectID)
 	}
 
 	return prompt

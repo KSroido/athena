@@ -29,8 +29,9 @@ func BuildRolePrompt(role, agentID, projectID, dataDir string, hrInstance *hr.HR
 
 	// 2. Check HR role library for soul
 	if hrInstance != nil {
-		if tmpl, found := hrInstance.ResolveRole(role); found && tmpl.Soul != "" {
-			return injectProjectContext(tmpl.Soul, agentID, projectID)
+		resolved, err := hrInstance.ResolveRoleForProject(role, projectID, "")
+		if err == nil && resolved != nil && resolved.FitnessPassed && resolved.Template.Soul != "" {
+			return injectProjectContext(resolved.Template.Soul, agentID, projectID)
 		}
 	}
 
