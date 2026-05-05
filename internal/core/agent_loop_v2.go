@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cloudwego/eino/components/tool"
 	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/ksroido/athena/internal/blackboard"
@@ -19,20 +19,10 @@ func (al *AgentLoop) RunInProcess(ctx context.Context, handle *AgentHandle) erro
 	// 1. Use shared LLMClient — get primary ChatModel for Eino tool binding
 	chatModel := al.cfg.LLM.PrimaryChatModel()
 
-	// 2. Create Athena tools
-	agentTools, err := al.createTools(ctx)
-	if err != nil {
-		return fmt.Errorf("create tools: %w", err)
-	}
-
-	// 3. Build system prompt (6-layer architecture + blackboard context)
-	systemPrompt := al.buildSystemPrompt()
-
-	// 4. Get tool infos
-	toolInfos := al.getToolInfos(ctx, agentTools)
-
-	// Conversation history
-	messages := []*schema.Message{schema.SystemMessage(systemPrompt)}
+	// 2. Build system prompt (role prompt architecture + blackboard context)
+	// Rebuilt for every task/steer so prompt_patch and dynamic Python tools can
+	// affect subsequent work without restarting the process.
+	var messages []*schema.Message
 
 	for {
 		select {
@@ -43,6 +33,10 @@ func (al *AgentLoop) RunInProcess(ctx context.Context, handle *AgentHandle) erro
 		case task := <-handle.TaskCh:
 			al.logger.Printf("received task: %s", truncateStr(task.Content, 80))
 			handle.Status = StatusWorking
+
+			agentTools, toolInfos := al.refreshToolsForTurn(ctx)
+			systemPrompt := al.buildSystemPromptWithTools(ctx, toolInfos)
+			messages = refreshSystemMessage(messages, systemPrompt)
 
 			// Build user message
 			userMsg := fmt.Sprintf("任务: %s\n\n请按照你的工作流程执行。使用工具完成工作，将结果写入黑板。", task.Content)
@@ -56,6 +50,10 @@ func (al *AgentLoop) RunInProcess(ctx context.Context, handle *AgentHandle) erro
 		case steer := <-handle.SteerCh:
 			al.logger.Printf("received steer: %s", truncateStr(steer, 80))
 			handle.Status = StatusWorking
+
+			agentTools, toolInfos := al.refreshToolsForTurn(ctx)
+			systemPrompt := al.buildSystemPromptWithTools(ctx, toolInfos)
+			messages = refreshSystemMessage(messages, systemPrompt)
 
 			// Differentiate steer type
 			var userMsg string
@@ -122,10 +120,50 @@ func (al *AgentLoop) runReActLoop(
 			result, err := al.executeToolCall(ctx, agentTools, tc)
 			if err != nil {
 				result = fmt.Sprintf("Tool error: %v", err)
+				al.writeToolErrorToBlackboard(tc.Function.Name, err)
 			}
 			*messages = append(*messages, schema.ToolMessage(result, tc.ID))
 		}
+
+		// Tool creation or prompt patches can change the next model call. Refresh
+		// bindings and replace the system prompt before continuing this ReAct loop.
+		agentTools, toolInfos = al.refreshToolsForTurn(ctx)
+		*messages = refreshSystemMessage(*messages, al.buildSystemPromptWithTools(ctx, toolInfos))
 	}
+
+	al.writeIterationLimitToBlackboard(maxIterations)
+}
+
+func (al *AgentLoop) writeToolErrorToBlackboard(toolName string, toolErr error) {
+	board, err := blackboard.OpenBoard(al.cfg.DataDir, al.cfg.ProjectID)
+	if err != nil {
+		return
+	}
+	defer board.Close()
+	board.WriteEntrySync(&db.BlackboardEntry{
+		ID:        generateUUID(),
+		ProjectID: al.cfg.ProjectID,
+		Category:  "progress",
+		Content:   fmt.Sprintf("[Agent %s 工具错误] tool=%s error=%v", al.cfg.AgentID, toolName, toolErr),
+		Certainty: "certain",
+		Author:    al.cfg.AgentID,
+	})
+}
+
+func (al *AgentLoop) writeIterationLimitToBlackboard(maxIterations int) {
+	board, err := blackboard.OpenBoard(al.cfg.DataDir, al.cfg.ProjectID)
+	if err != nil {
+		return
+	}
+	defer board.Close()
+	board.WriteEntrySync(&db.BlackboardEntry{
+		ID:        generateUUID(),
+		ProjectID: al.cfg.ProjectID,
+		Category:  "progress",
+		Content:   fmt.Sprintf("[Agent %s 达到迭代上限] max_iterations=%d，本轮可能未完成；需要读取最近工具结果、黑板进展和任务验收标准后继续。", al.cfg.AgentID, maxIterations),
+		Certainty: "conjecture",
+		Author:    al.cfg.AgentID,
+	})
 }
 
 // buildVerificationSteerMessage constructs a detailed steer message for PM verification

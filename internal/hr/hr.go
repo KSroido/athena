@@ -79,13 +79,13 @@ func (h *HR) RolesDir() string {
 
 // RoleTemplate defines a role template for creating agents.
 type RoleTemplate struct {
-	Role        string   `json:"role"`         // e.g. "dev.backend.finance"
-	Name        string   `json:"name"`         // e.g. "金融/量化开发工程师"
-	Category    string   `json:"category"`     // e.g. "dev" — determines tool set
-	Description string   `json:"description"`  // Human-readable description
-	Domain      string   `json:"domain"`       // Generation context: what project/domain this soul was created for
-	Tools       []string `json:"tools"`        // tool names (auto-filled from category if empty)
-	Soul        string   `json:"soul"`         // Full 6-layer soul prompt
+	Role        string   `json:"role"`        // e.g. "dev.backend.finance"
+	Name        string   `json:"name"`        // e.g. "金融/量化开发工程师"
+	Category    string   `json:"category"`    // e.g. "dev" — determines tool set
+	Description string   `json:"description"` // Human-readable description
+	Domain      string   `json:"domain"`      // Generation context: what project/domain this soul was created for
+	Tools       []string `json:"tools"`       // tool names (auto-filled from category if empty)
+	Soul        string   `json:"soul"`        // Full role soul prompt
 }
 
 // SeedTemplates are the built-in seed templates shipped with Athena.
@@ -575,10 +575,10 @@ func GetToolsForCategory(category string) []string {
 
 // HireRequest is a request to hire a new agent.
 type HireRequest struct {
-	Role       string `json:"role"`        // Role ID (e.g. "dev.backend.finance")
-	Speciality string `json:"speciality"`  // Extra speciality hint for LLM soul generation
+	Role       string `json:"role"`       // Role ID (e.g. "dev.backend.finance")
+	Speciality string `json:"speciality"` // Extra speciality hint for LLM soul generation
 	ProjectID  string `json:"project_id"`
-	Reason     string `json:"reason"`      // Why this role is needed (used in soul generation + fitness check)
+	Reason     string `json:"reason"` // Why this role is needed (used in soul generation + fitness check)
 }
 
 // Hire creates and starts a new agent with project-aware role resolution.
@@ -726,7 +726,7 @@ func (h *HR) Hire(req *HireRequest) (*db.Agent, error) {
 // Dynamic Soul Generation
 // ---------------------------------------------------------------------------
 
-// generateRoleSoul uses LLM to generate a 6-layer soul prompt for a custom role
+// generateRoleSoul uses LLM to generate a role soul prompt for a custom role
 func (h *HR) generateRoleSoul(role, speciality, category, reason string) (string, error) {
 	if h.llm == nil {
 		return "", fmt.Errorf("LLM not available for soul generation")
@@ -736,8 +736,14 @@ func (h *HR) generateRoleSoul(role, speciality, category, reason string) (string
 	defer cancel()
 
 	system := "你是 Athena 系统的 HR 角色设计师。你的任务是为一个新 Agent 生成完整的角色定义（soul）。\n\n" +
-		"soul 必须严格遵循以下6层结构，每层都不可省略：\n\n" +
+		"soul 必须严格遵循以下7层结构，每层都不可省略：\n\n" +
 		"# 身份\n- 明确声明角色名称、专业领域、所属项目\n\n" +
+		"# 通用行为协议\n- 使用简体中文，输出直接、技术化、可执行，避免隐喻和文学化表述\n" +
+		"- 需要行动时必须调用可用工具执行，不要只描述计划或承诺后续动作\n" +
+		"- 涉及文件内容、目录结构、系统状态、命令结果、Git状态、计算、测试、构建、端口和进程时，必须用工具验证\n" +
+		"- 修改文件前先读取相关文件，修改后执行验证命令或读取结果确认\n" +
+		"- 缺少上下文时优先使用当前角色可用工具读黑板、文件、记忆或执行查询；仍缺失则写黑板请求澄清\n" +
+		"- 不确定结论标记为 conjecture；重要结论、进展、错误和验证结果必须写入黑板并附证据\n\n" +
 		"# 核心原则\n- 5条以内，是该角色的行为底线和决策准则\n- 必须体现该角色的专业特性（区别于通用角色）\n\n" +
 		"# 工作流程\n- 分阶段的步骤，每步包含具体操作\n- 必须包含与其他角色的协作点（何时读黑板、何时提交验收等）\n\n" +
 		"# 工具使用规范\n- 列出该角色可用工具及使用场景\n- 开发类角色必须包含 submit_for_review\n\n" +
@@ -748,7 +754,7 @@ func (h *HR) generateRoleSoul(role, speciality, category, reason string) (string
 		"3. 协作性：明确何时与谁协作，通过什么工具\n" +
 		"4. 只输出 soul 内容本身，不要输出任何解释或元信息"
 
-	user := fmt.Sprintf("请为以下角色生成 soul：\n\n- 角色ID: %s\n- 专业方向: %s\n- 角色大类: %s\n- 项目需求: %s\n\n请生成完整的6层 soul。", role, speciality, categoryDisplayName(category), reason)
+	user := fmt.Sprintf("请为以下角色生成 soul：\n\n- 角色ID: %s\n- 专业方向: %s\n- 角色大类: %s\n- 项目需求: %s\n\n请生成完整的7层 soul。", role, speciality, categoryDisplayName(category), reason)
 
 	resp, err := h.llm.ChatWithSystem(ctx, system, user)
 	if err != nil {
@@ -766,6 +772,14 @@ func (h *HR) fallbackSoul(role, speciality, category string) string {
 		sb.WriteString(fmt.Sprintf("你的专业方向是：%s\n", speciality))
 	}
 	sb.WriteString(fmt.Sprintf("角色大类：%s\n\n", categoryDisplayName(category)))
+
+	sb.WriteString("# 通用行为协议\n\n")
+	sb.WriteString("- 使用简体中文，输出直接、技术化、可执行，避免隐喻和文学化表述\n")
+	sb.WriteString("- 需要行动时必须调用可用工具执行，不要只描述计划或承诺后续动作\n")
+	sb.WriteString("- 涉及文件内容、目录结构、系统状态、命令结果、Git状态、计算、测试、构建、端口和进程时，必须用工具验证\n")
+	sb.WriteString("- 修改文件前先读取相关文件，修改后执行验证命令或读取结果确认\n")
+	sb.WriteString("- 缺少上下文时优先使用当前角色可用工具读黑板、文件、记忆或执行查询；仍缺失则写黑板请求澄清\n")
+	sb.WriteString("- 不确定结论标记为 conjecture；重要结论、进展、错误和验证结果必须写入黑板并附证据\n\n")
 
 	sb.WriteString("# 核心原则\n\n")
 	sb.WriteString("- 专业专注：只处理自己专业领域内的问题\n")

@@ -50,6 +50,7 @@ func NewAgentLoop(cfg *AgentLoopConfig) *AgentLoop {
 // createTools creates the Eino tools for this agent
 func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, error) {
 	var agentTools []tool.InvokableTool
+	workspaceDir := filepath.Join(al.cfg.DataDir, "workspace", al.cfg.ProjectID)
 
 	// Blackboard read tool
 	bbRead, err := tools.NewBlackboardReadTool(al.cfg.DataDir, al.cfg.ProjectID, al.cfg.Role)
@@ -85,8 +86,28 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 	}
 	agentTools = append(agentTools, meeting)
 
+	// Self-improvement tools are available to all roles. They let an agent record
+	// durable prompt gaps and create reusable Python capabilities instead of
+	// relying on hardcoded role-specific solutions.
+	selfAssess, err := tools.NewSelfAssessTool(al.cfg.DataDir, al.cfg.ProjectID, al.cfg.AgentID, workspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("create self_assess tool: %w", err)
+	}
+	agentTools = append(agentTools, selfAssess)
+
+	promptPatch, err := tools.NewPromptPatchTool(al.cfg.DataDir, al.cfg.AgentID)
+	if err != nil {
+		return nil, fmt.Errorf("create prompt_patch tool: %w", err)
+	}
+	agentTools = append(agentTools, promptPatch)
+
+	dynamicRunner, err := tools.NewDynamicPythonToolRunner(workspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("create dynamic_python_tool: %w", err)
+	}
+	agentTools = append(agentTools, dynamicRunner)
+
 	// Role-specific tools
-	workspaceDir := filepath.Join(al.cfg.DataDir, "workspace", al.cfg.ProjectID)
 	category := hr.InferCategory(al.cfg.Role)
 
 	switch category {
@@ -107,6 +128,14 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 			agentTools = append(agentTools, hrReq)
 		}
 		// PM also gets file tools for verification (must read developer output)
+		pythonTool, err := tools.NewPythonExecTool(workspaceDir)
+		if err == nil {
+			agentTools = append(agentTools, pythonTool)
+		}
+		toolCreate, err := tools.NewPythonToolCreateTool(workspaceDir)
+		if err == nil {
+			agentTools = append(agentTools, toolCreate)
+		}
 		fileRead, err := tools.NewFileReadTool(workspaceDir)
 		if err == nil {
 			agentTools = append(agentTools, fileRead)
@@ -114,15 +143,27 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 		fileWrite, err := tools.NewFileWriteTool(workspaceDir)
 		if err == nil {
 			agentTools = append(agentTools, fileWrite)
-	}
+		}
 
 	case "dev":
-		// All dev.* roles get term, file_read, file_write, submit_for_review
+		// All dev.* roles get term, python, dynamic tool authoring, file_read, file_write, submit_for_review
 		termTool, err := tools.NewTermExecTool(workspaceDir)
 		if err != nil {
 			return nil, fmt.Errorf("create term tool: %w", err)
 		}
 		agentTools = append(agentTools, termTool)
+
+		pythonTool, err := tools.NewPythonExecTool(workspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("create python tool: %w", err)
+		}
+		agentTools = append(agentTools, pythonTool)
+
+		toolCreate, err := tools.NewPythonToolCreateTool(workspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("create tool_create_python: %w", err)
+		}
+		agentTools = append(agentTools, toolCreate)
 
 		fileRead, err := tools.NewFileReadTool(workspaceDir)
 		if err != nil {
@@ -146,12 +187,24 @@ func (al *AgentLoop) createTools(ctx context.Context) ([]tool.InvokableTool, err
 		}
 
 	case "tester":
-		// All tester* roles get term, file_read, file_write
+		// All tester* roles get term, python, dynamic tool authoring, file_read, file_write
 		termTool, err := tools.NewTermExecTool(workspaceDir)
 		if err != nil {
 			return nil, fmt.Errorf("create term tool: %w", err)
 		}
 		agentTools = append(agentTools, termTool)
+
+		pythonTool, err := tools.NewPythonExecTool(workspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("create python tool: %w", err)
+		}
+		agentTools = append(agentTools, pythonTool)
+
+		toolCreate, err := tools.NewPythonToolCreateTool(workspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("create tool_create_python: %w", err)
+		}
+		agentTools = append(agentTools, toolCreate)
 
 		fileRead, err := tools.NewFileReadTool(workspaceDir)
 		if err != nil {
@@ -223,15 +276,64 @@ func (al *AgentLoop) executeToolCall(ctx context.Context, agentTools []tool.Invo
 	return "", fmt.Errorf("tool %s not found", tc.Function.Name)
 }
 
-// buildSystemPrompt constructs the system prompt using the 6-layer architecture
+// buildAvailableToolsSection formats the actual tools bound to this agent.
+func (al *AgentLoop) buildAvailableToolsSection(ctx context.Context, toolInfos []*schema.ToolInfo) string {
+	var sb strings.Builder
+	sb.WriteString("\n# 当前可用工具\n\n")
+	sb.WriteString("只能调用本节列出的工具。不要假设存在未列出的工具。工具返回值是事实依据；失败时必须读取错误信息并记录处理策略。\n")
+	sb.WriteString("如果发现工具不足，先使用 self_assess 明确能力缺口；稳定行为缺口用 prompt_patch 修订 soul；可复用执行能力用 tool_create_python 创建动态 Python 工具；一次性计算或探查用 python。\n\n")
+	for _, info := range toolInfos {
+		desc := strings.TrimSpace(info.Desc)
+		if desc == "" {
+			desc = "无描述"
+		}
+		sb.WriteString(fmt.Sprintf("- `%s`: %s\n", info.Name, desc))
+	}
+	workspaceDir := filepath.Join(al.cfg.DataDir, "workspace", al.cfg.ProjectID)
+	if dynamicTools := tools.DynamicPythonToolInventory(workspaceDir); strings.TrimSpace(dynamicTools) != "" {
+		sb.WriteString("\n## 已注册动态 Python 工具\n")
+		sb.WriteString("通过 `dynamic_python_tool` 按 name 调用：\n")
+		sb.WriteString(dynamicTools)
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func (al *AgentLoop) refreshToolsForTurn(ctx context.Context) ([]tool.InvokableTool, []*schema.ToolInfo) {
+	agentTools, err := al.createTools(ctx)
+	if err != nil {
+		al.logger.Printf("refresh tools error: %v", err)
+		return nil, nil
+	}
+	return agentTools, al.getToolInfos(ctx, agentTools)
+}
+
+func refreshSystemMessage(messages []*schema.Message, systemPrompt string) []*schema.Message {
+	msg := schema.SystemMessage(systemPrompt)
+	if len(messages) == 0 {
+		return []*schema.Message{msg}
+	}
+	messages[0] = msg
+	return messages
+}
+
+// buildSystemPrompt constructs the system prompt using the role prompt architecture
 func (al *AgentLoop) buildSystemPrompt() string {
-	// Layers 1-6 from prompts.go (with dynamic soul resolution)
+	_, toolInfos := al.refreshToolsForTurn(context.Background())
+	return al.buildSystemPromptWithTools(context.Background(), toolInfos)
+}
+
+func (al *AgentLoop) buildSystemPromptWithTools(ctx context.Context, toolInfos []*schema.ToolInfo) string {
+	// Role prompt from prompts.go (with dynamic soul resolution)
 	prompt := BuildRolePrompt(al.cfg.Role, al.cfg.AgentID, al.cfg.ProjectID, al.cfg.DataDir, al.cfg.HR)
 
-	// Append Layer 7: Project context from blackboard
+	// Append Layer 7: actual tool inventory bound to this agent.
+	prompt += al.buildAvailableToolsSection(ctx, toolInfos)
+
+	// Append Layer 8: Project context from blackboard
 	prompt += buildBlackboardContext(al.cfg.DataDir, al.cfg.ProjectID)
 
-	// Append Layer 8: Available roles catalog (for PM)
+	// Append Layer 9: Available roles catalog (for PM)
 	if al.cfg.Role == "pm" && al.cfg.HR != nil {
 		prompt += "\n# 可招聘角色\n\n"
 		prompt += al.cfg.HR.RoleCatalog(al.cfg.ProjectID)

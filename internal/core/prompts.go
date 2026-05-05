@@ -9,7 +9,8 @@ import (
 	"github.com/ksroido/athena/internal/hr"
 )
 
-// BuildRolePrompt constructs a structured 6-layer system prompt for a given role.
+// BuildRolePrompt constructs a structured role system prompt for a given role.
+// The prompt includes a shared behavior protocol plus role-specific layers.
 //
 // Resolution order:
 //  1. Custom soul file: {dataDir}/agents/{agentID}/soul.md (if exists and non-trivial)
@@ -48,11 +49,58 @@ func BuildRolePrompt(role, agentID, projectID, dataDir string, hrInstance *hr.HR
 // injectProjectContext prepends agent ID and project ID to a soul
 func injectProjectContext(soul, agentID, projectID string) string {
 	header := fmt.Sprintf("Agent ID: `%s`\n项目: `%s`\n\n", agentID, projectID)
+	header += commonBehaviorProtocol()
 	return header + soul
 }
 
+// commonBehaviorProtocol contains the shared execution discipline every Athena
+// agent must follow. It is adapted from the Hermes Agent Persona prompt, but
+// excludes Hermes-specific memory, skill, transport, and session details.
+func commonBehaviorProtocol() string {
+	return `# 通用行为协议
+
+## 语言和风格
+- 使用简体中文。技术名词可保留英文原文。
+- 输出直接、技术化、可执行。避免隐喻、文学化表述、情绪化语气。
+- 并列信息优先使用列表或表格；结论必须有证据或说明依据。
+
+## 工具使用纪律
+- 需要采取行动时，必须调用可用工具执行，不要只描述计划。
+- 不要以“稍后处理”“下一步会做”结束当前任务；如工具可完成，应立即执行。
+- 涉及文件内容、目录结构、系统状态、命令结果、Git 状态、计算、测试、构建、端口和进程时，必须使用工具获取事实，不得凭记忆或推测回答。
+- 修改文件前必须先读取相关文件；修改后必须执行可用的验证命令或读取结果确认。
+- 发现工具缺口、反复失败、prompt 与实际任务不匹配、或当前职责过窄时，必须先使用 self_assess 记录能力缺口，再选择 prompt_patch、tool_create_python 或 python 补齐；禁止只等待外部修改。
+- 稳定行为缺口写入 prompt_patch；可复用执行能力写入 tool_create_python；一次性数据处理或探查使用 python。
+- 动态工具创建后应立即用 dynamic_python_tool 或 python 做最小验证，并把输入、输出摘要、文件路径写入黑板。
+- 写入黑板的关键结论必须包含可复现证据：文件路径、命令、输出摘要、测试结果、错误信息或产物统计。
+
+## 执行流程
+- 开始前先做前置检查：读取黑板、任务说明、验收标准和相关文件。
+- 当任务有明显默认解释时直接执行；只有歧义会改变工具调用或实现范围时才请求澄清。
+- 如果上一步输出是下一步输入，必须先解析并确认依赖结果，再继续。
+- 发现问题时先定位根因，再修改；不要用未验证的猜测替代分析。
+
+## 缺失上下文处理
+- 缺少上下文时，按顺序优先读取：项目黑板、个人 memory、相关文件、当前角色可用查询工具或 term。
+- 查询仍无法获得必要信息时，写入黑板请求 PM 或 CEO 澄清，并标明阻塞点、已查位置和仍缺少的信息。
+- 不确定结论必须标记为 conjecture；只有有完整证据链的事实才可声明为 certain 或提交验证。
+
+## 记忆与黑板边界
+- memory 只写长期稳定事实、项目约定、用户偏好或环境约束；禁止写临时任务进度。
+- blackboard 写任务目标、计划、进度、错误、验收、临时发现和协作请求。
+- 程序化流程或反复复用的操作方法应写入项目文档或角色库，不要塞入 memory。
+
+## 验证和交付
+- 完成前必须自检：需求是否覆盖、产出是否存在、验证是否执行、结果是否写入黑板。
+- Developer 类角色完成开发后必须使用 submit_for_review；只写黑板不等于提交验收。
+- PM 验收必须读取实际产出文件并逐条对照 acceptance_criteria，禁止只依据 Developer 自述通过。
+- 所有重要结论、进展、错误和验证结果应写入黑板，内容要包含可复现证据：文件路径、命令、输出摘要、测试结果或失败原因。
+
+`
+}
+
 // ---------------------------------------------------------------------------
-// Built-in seed role prompts (Layer 1-6)
+// Built-in seed role prompts (shared behavior protocol + role layers)
 // ---------------------------------------------------------------------------
 
 func builtinRolePrompt(role, agentID, projectID string) string {
@@ -62,6 +110,7 @@ func builtinRolePrompt(role, agentID, projectID string) string {
 	sb.WriteString("# 身份\n\n")
 	sb.WriteString(fmt.Sprintf("你是 Athena 系统中的 **%s** Agent（ID: `%s`）。\n", roleName(role), agentID))
 	sb.WriteString(fmt.Sprintf("项目: `%s`\n\n", projectID))
+	sb.WriteString(commonBehaviorProtocol())
 
 	// === Layer 2: Principles ===
 	principles := rolePrinciples(role)
@@ -120,6 +169,7 @@ func genericRolePrompt(role, agentID, projectID, category string) string {
 	sb.WriteString(fmt.Sprintf("你是 Athena 系统中的 **%s** Agent（ID: `%s`）。\n", categoryName, agentID))
 	sb.WriteString(fmt.Sprintf("角色ID: `%s`\n", role))
 	sb.WriteString(fmt.Sprintf("项目: `%s`\n\n", projectID))
+	sb.WriteString(commonBehaviorProtocol())
 
 	sb.WriteString("# 核心原则\n\n")
 	sb.WriteString("- 专业专注：只处理自己专业领域内的问题\n")
@@ -377,6 +427,9 @@ func roleToolNorms(role string) []string {
 		"blackboard_write: 写入分析结论、验收结果、进展报告",
 		"memory_read: 读取个人记忆，回顾历史经验",
 		"memory_write: 记录经验教训（如常见问题模式、解决方案），写事实不写指令",
+		"self_assess: 发现能力缺口、工具不足、prompt 不匹配或反复失败时，先检查当前 soul、memory 和动态工具状态",
+		"prompt_patch: 将稳定、可复用的行为改进追加到自己的 soul.md，禁止写临时任务进度",
+		"dynamic_python_tool: 执行已注册的动态 Python 工具",
 	}
 
 	switch role {
@@ -391,6 +444,8 @@ func roleToolNorms(role string) []string {
 			"file_write: 创建和修改代码文件",
 			"file_read: 修改前必须先读取已有文件",
 			"term: 执行命令（编译、测试、安装依赖等），危险命令会被拦截",
+			"python: 通过内建 Python 输入接口执行计算、数据处理、探查和文件生成",
+			"tool_create_python: 将重复使用的 Python 能力注册成动态工具，而不是把方案写死到 prompt",
 			"submit_for_review: 完成开发后必须使用此工具提交验收，否则PM不会收到通知",
 		)
 	case "tester":
@@ -398,6 +453,8 @@ func roleToolNorms(role string) []string {
 			"file_write: 创建测试用例文件",
 			"file_read: 读取待测试代码",
 			"term: 执行测试命令",
+			"python: 执行测试数据生成、结果统计和快速验证脚本",
+			"tool_create_python: 将可复用测试/验证脚本注册成动态工具",
 		)
 	case "reviewer":
 		return append(common,

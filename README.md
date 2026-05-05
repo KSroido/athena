@@ -99,6 +99,52 @@ Each agent's system prompt follows a structured 6-layer architecture:
 ```bash
 git clone https://github.com/KSroido/athena.git
 cd athena
+./install.sh
+```
+
+`install.sh` performs the full local installation:
+
+| Step | What it does |
+|------|--------------|
+| Build | Compiles `./cmd/athena` with `CGO_CFLAGS=-DSQLITE_ENABLE_FTS5`, `CGO_LDFLAGS=-lm`, and `GOTOOLCHAIN=auto` |
+| Install binary | Installs `athena` to `~/.local/bin/athena` by default |
+| Create config | Copies `config/athena.example.yaml` to `~/.config/athena/athena.yaml` when the target config does not exist |
+| Add PATH | Appends the install directory to your shell startup file (`~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`) |
+| Print next command | Prints the exact `athena -config ...` command to run |
+
+After installation, open a new shell or run:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then verify:
+
+```bash
+athena -h
+athena -config ~/.config/athena/athena.yaml
+```
+
+Installer options:
+
+| Option | Description |
+|--------|-------------|
+| `--dir DIR` | Install binary to `DIR` instead of `~/.local/bin` |
+| `--config-dir DIR` | Create/read config under `DIR` instead of `~/.config/athena` |
+| `--no-config` | Skip config file creation |
+| `--help` | Show installer help |
+
+Examples:
+
+```bash
+./install.sh --dir ~/.local/bin --config-dir ~/.config/athena
+ATHENA_INSTALL_DIR=/usr/local/bin ./install.sh --no-config
+make install
+```
+
+Manual build without installing:
+
+```bash
 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" go build -o athena ./cmd/athena
 ```
 

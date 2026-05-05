@@ -1,4 +1,4 @@
-.PHONY: build test clean dev
+.PHONY: build test clean dev install
 
 # CGO flags for SQLite FTS5 support
 export CGO_CFLAGS = -DSQLITE_ENABLE_FTS5
@@ -6,6 +6,9 @@ export CGO_LDFLAGS = -lm
 
 build:
 	GOTOOLCHAIN=auto go build -o athena ./cmd/athena/
+
+install:
+	./install.sh
 
 build-agent:
 	GOTOOLCHAIN=auto go build -o athena-agent ./cmd/athena-agent/ 2>/dev/null || true

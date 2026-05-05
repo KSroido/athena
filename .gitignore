@@ -5,6 +5,9 @@ data/meetings/archived/*.sqlite
 data/agents/*/context.db
 data/agents/*/memory.md
 data/agents/*/working/
+data/agents/*/soul.md
+data/roles/*/
+data/workspace/*/
 data/logs/
 
 # MCP servers (third-party)

@@ -99,6 +99,52 @@
 ```bash
 git clone https://github.com/KSroido/athena.git
 cd athena
+./install.sh
+```
+
+`install.sh` 会完成完整的本地安装流程：
+
+| 步骤 | 行为 |
+|------|------|
+| 构建 | 使用 `CGO_CFLAGS=-DSQLITE_ENABLE_FTS5`、`CGO_LDFLAGS=-lm`、`GOTOOLCHAIN=auto` 编译 `./cmd/athena` |
+| 安装二进制 | 默认安装到 `~/.local/bin/athena` |
+| 创建配置 | 当目标配置不存在时，将 `config/athena.example.yaml` 复制到 `~/.config/athena/athena.yaml` |
+| 加入 PATH | 把安装目录追加到 shell 启动文件（`~/.bashrc`、`~/.zshrc` 或 `~/.config/fish/config.fish`） |
+| 输出运行命令 | 打印可直接执行的 `athena -config ...` 命令 |
+
+安装后，打开新 shell，或手动执行：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+然后验证：
+
+```bash
+athena -h
+athena -config ~/.config/athena/athena.yaml
+```
+
+安装选项：
+
+| 选项 | 说明 |
+|------|------|
+| `--dir DIR` | 安装二进制到 `DIR`，替代默认 `~/.local/bin` |
+| `--config-dir DIR` | 在 `DIR` 下创建/读取配置，替代默认 `~/.config/athena` |
+| `--no-config` | 跳过配置文件创建 |
+| `--help` | 显示安装脚本帮助 |
+
+示例：
+
+```bash
+./install.sh --dir ~/.local/bin --config-dir ~/.config/athena
+ATHENA_INSTALL_DIR=/usr/local/bin ./install.sh --no-config
+make install
+```
+
+仅手动构建，不安装：
+
+```bash
 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" go build -o athena ./cmd/athena
 ```
 
